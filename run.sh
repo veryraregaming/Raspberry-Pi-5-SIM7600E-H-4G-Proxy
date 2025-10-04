@@ -27,6 +27,9 @@ curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
 apt install -y nodejs
 npm install -g pm2
 
+# Store project directory before any cd commands
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Install 3proxy from source
 echo "🔧 Installing 3proxy from source..."
 apt install -y build-essential wget unzip
@@ -38,9 +41,9 @@ make -f Makefile.Linux
 cp bin/3proxy /usr/local/bin/
 chmod +x /usr/local/bin/3proxy
 
-# Return to project directory (use script location)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+# Clean up and return to project directory
+cd "$PROJECT_DIR"
+rm -rf /tmp/3proxy-master /tmp/master.zip
 
 # Install iptables
 echo "🌐 Installing network tools..."
