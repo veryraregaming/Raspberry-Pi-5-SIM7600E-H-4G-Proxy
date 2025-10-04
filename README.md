@@ -33,8 +33,10 @@ cd raspi-4g-proxy-v2
 ```bash
 sudo apt update
 sudo apt install python3 python3-pip python3-yaml python3-serial python3-requests iptables -y
-pip3 install flask pyyaml pyserial requests
+pip3 install -r requirements.txt --break-system-packages
 ```
+
+**Note:** The `--break-system-packages` flag is required on Ubuntu 24.04+ to override system protection.
 
 ### 3. Configure
 ```bash
@@ -106,6 +108,7 @@ echo -e "AT+CGACT=1,1\r" | sudo tee /dev/ttyUSB2
 raspi-4g-proxy-v2/
 ├── orchestrator.py          # Main application
 ├── config.yaml.example     # Configuration template
+├── requirements.txt        # Python dependencies
 ├── scripts/
 │   └── 4gproxy-net.sh      # Network setup script
 └── README.md               # This file
@@ -141,6 +144,15 @@ ps aux | grep orchestrator.py
 
 # Check port binding
 netstat -tlnp | grep 8088
+```
+
+### Flask Module Not Found
+```bash
+# Install Flask and dependencies
+pip3 install -r requirements.txt --break-system-packages
+
+# Or install Flask via apt
+sudo apt install python3-flask -y
 ```
 
 ## 📝 License
