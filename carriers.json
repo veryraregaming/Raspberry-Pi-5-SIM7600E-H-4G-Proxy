@@ -1,0 +1,108 @@
+{
+  "carriers": {
+    "ee": {
+      "name": "EE Internet",
+      "apn": "everywhere",
+      "username": "eesecure",
+      "password": "secure",
+      "ip_type": "ipv4",
+      "dns": "automatic"
+    },
+    "o2_contract": {
+      "name": "O2 Internet",
+      "apn": "mobile.o2.co.uk",
+      "username": "o2web",
+      "password": "password",
+      "ip_type": "ipv4",
+      "dns": "automatic"
+    },
+    "o2_payg": {
+      "name": "O2 PAYG",
+      "apn": "payandgo.o2.co.uk",
+      "username": "payandgo",
+      "password": "password",
+      "ip_type": "ipv4",
+      "dns": "automatic"
+    },
+    "vodafone_contract": {
+      "name": "Vodafone Internet",
+      "apn": "internet",
+      "username": "",
+      "password": "",
+      "ip_type": "ipv4",
+      "dns": "automatic"
+    },
+    "vodafone_payg": {
+      "name": "Vodafone PAYG",
+      "apn": "pp.vodafone.co.uk",
+      "username": "",
+      "password": "",
+      "ip_type": "ipv4",
+      "dns": "automatic"
+    },
+    "three": {
+      "name": "Three Internet",
+      "apn": "three.co.uk",
+      "username": "",
+      "password": "",
+      "ip_type": "ipv4",
+      "dns": "automatic"
+    },
+    "giffgaff": {
+      "name": "giffgaff",
+      "apn": "giffgaff.com",
+      "username": "giffgaff",
+      "password": "",
+      "ip_type": "ipv4",
+      "dns": "automatic"
+    },
+    "tesco": {
+      "name": "Tesco Mobile",
+      "apn": "prepay.tesco-mobile.com",
+      "username": "tesco",
+      "password": "password",
+      "ip_type": "ipv4",
+      "dns": "automatic"
+    },
+    "asda": {
+      "name": "ASDA Internet",
+      "apn": "everywhere",
+      "username": "eesecure",
+      "password": "secure",
+      "ip_type": "ipv4",
+      "dns": "automatic"
+    },
+    "bt": {
+      "name": "BT Internet",
+      "apn": "everywhere",
+      "username": "eesecure",
+      "password": "secure",
+      "ip_type": "ipv4",
+      "dns": "automatic"
+    },
+    "1pmobile": {
+      "name": "1pMobile Internet",
+      "apn": "data.uk",
+      "username": "user",
+      "password": "one2one",
+      "ip_type": "ipv4",
+      "dns": "automatic"
+    },
+    "sky": {
+      "name": "Sky Mobile",
+      "apn": "mobile.sky",
+      "username": "",
+      "password": "",
+      "ip_type": "ipv4",
+      "dns": "automatic"
+    },
+    "lyca": {
+      "name": "Lycamobile UK",
+      "apn": "data.lycamobile.co.uk",
+      "username": "lmuk",
+      "password": "plus",
+      "ip_type": "ipv4",
+      "dns": "automatic"
+    }
+  }
+}

@@ -84,6 +84,29 @@ def send_at_command(cmd, port=None, timeout=2):
         print(f"  ⚠️ AT command failed: {e}")
         return ""
 
+def load_carrier_config(apn):
+    """Load carrier configuration from carriers.json"""
+    try:
+        with open("carriers.json", "r") as f:
+            carriers = json.load(f)
+        
+        # Find carrier by APN
+        for carrier_id, carrier_info in carriers["carriers"].items():
+            if carrier_info["apn"] == apn:
+                return carrier_info
+        
+        # If not found, return default EE config
+        return carriers["carriers"]["ee"]
+    except:
+        # Fallback to EE config
+        return {
+            "name": "EE Internet",
+            "apn": "everywhere",
+            "username": "eesecure",
+            "password": "secure",
+            "ip_type": "ipv4"
+        }
+
 def activate_modem():
     """Activate SIM7600E-H modem using ModemManager"""
     print("📡 Activating SIM7600E-H modem...")
@@ -96,7 +119,9 @@ def activate_modem():
     except:
         apn = "everywhere"
     
-    print(f"  📡 Using APN: {apn}")
+    # Load carrier configuration
+    carrier = load_carrier_config(apn)
+    print(f"  📡 Using APN: {apn} ({carrier['name']})")
     
     # Reset modem first to clear any stuck state
     print("  🔄 Resetting modem...")
@@ -106,11 +131,12 @@ def activate_modem():
     # Try ModemManager first (more reliable)
     print("  🔄 Trying ModemManager connection...")
     
-    # Use EE secure credentials if APN is "everywhere"
-    if apn == "everywhere":
-        print("  📡 Using EE secure credentials...")
-        result = run_cmd(f"sudo mmcli -m 0 --simple-connect=\"apn={apn},user=eesecure,password=secure,ip-type=ipv4\"", check=False)
+    # Build connection string with carrier credentials
+    if carrier["username"] and carrier["password"]:
+        print(f"  📡 Using {carrier['name']} credentials...")
+        result = run_cmd(f"sudo mmcli -m 0 --simple-connect=\"apn={apn},user={carrier['username']},password={carrier['password']},ip-type=ipv4\"", check=False)
     else:
+        print(f"  📡 Using {carrier['name']} (no auth)...")
         result = run_cmd(f"sudo mmcli -m 0 --simple-connect=\"apn={apn},ip-type=ipv4\"", check=False)
     
     if "successfully connected" in result[0].lower():
@@ -221,41 +247,39 @@ def activate_modem():
 
 def try_common_apns(port):
     """Try common APN configurations if default fails"""
-    print("  🔄 Trying APNs from apn.txt...")
+    print("  🔄 Trying APNs from carriers.json...")
     
-    # Load APNs from apn.txt file
-    apns = []
+    # Load carriers from JSON file
+    carriers_to_try = []
     try:
-        with open("apn.txt", "r") as f:
-            for line in f:
-                line = line.strip()
-                # Skip empty lines and comments
-                if line and not line.startswith("#"):
-                    apns.append(line)
-        print(f"  📋 Loaded {len(apns)} APNs from apn.txt")
+        with open("carriers.json", "r") as f:
+            carriers = json.load(f)
+        
+        # Add all carriers from JSON
+        for carrier_id, carrier_info in carriers["carriers"].items():
+            carriers_to_try.append(carrier_info)
+        
+        print(f"  📋 Loaded {len(carriers_to_try)} carriers from carriers.json")
     except FileNotFoundError:
-        print("  ⚠️ apn.txt not found, using default APNs")
+        print("  ⚠️ carriers.json not found, using fallback APNs")
         # Fallback to hardcoded list
-        apns = [
-            "everywhere",   # EE (UK) - most common
-            "internet",     # Generic
-            "web",          # Some carriers
-            "data",         # Some carriers  
-            "broadband",    # Some carriers
-            "mobile",       # Some carriers
-            "3gnet",        # Some carriers
-            "fast.t-mobile.com",  # T-Mobile
-            "broadband",    # Verizon
-            "internet",     # AT&T
-            "internet",     # Vodafone
-            "internet",     # Three
+        carriers_to_try = [
+            {"apn": "everywhere", "name": "EE Internet", "username": "eesecure", "password": "secure"},
+            {"apn": "internet", "name": "Generic Internet", "username": "", "password": ""},
+            {"apn": "web", "name": "Web APN", "username": "", "password": ""},
+            {"apn": "data", "name": "Data APN", "username": "", "password": ""},
+            {"apn": "three.co.uk", "name": "Three Internet", "username": "", "password": ""},
+            {"apn": "mobile.o2.co.uk", "name": "O2 Internet", "username": "o2web", "password": "password"},
+            {"apn": "giffgaff.com", "name": "giffgaff", "username": "giffgaff", "password": ""},
         ]
     
-    for apn in apns:
-        print(f"  📤 Trying APN: {apn}")
+    for carrier in carriers_to_try:
+        apn = carrier["apn"]
+        name = carrier["name"]
+        print(f"  📤 Trying APN: {apn} ({name})")
         
-               # Configure PDP context with specific APN
-               send_at_command("AT+CGDCONT=1,\"IP\",\"" + apn + "\",\"0.0.0.0\",0,0", port)
+        # Configure PDP context with specific APN
+        send_at_command("AT+CGDCONT=1,\"IP\",\"" + apn + "\",\"0.0.0.0\",0,0", port)
         time.sleep(1)
         
         # Activate PDP context
@@ -267,7 +291,7 @@ def try_common_apns(port):
         print(f"  📥 {ip_response}")
         
         if "+CGPADDR: 1," in ip_response and "0.0.0.0" not in ip_response:
-            print(f"  ✅ Success with APN: {apn}")
+            print(f"  ✅ Success with APN: {apn} ({name})")
             return True
     
     print("  ❌ No working APN found")
