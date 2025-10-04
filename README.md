@@ -50,6 +50,12 @@ sudo ./run.sh
 - 🔄 IP rotation: Automatic every 5 minutes
 - 🔑 API token: Auto-generated and saved to config.yaml
 
+**When PM2 restarts services, you'll see:**
+- 🚀 4G Proxy Orchestrator Started
+- 📡 HTTP Proxy: `192.168.1.37:8080`
+- 🔓 No authentication required (or 🔐 Authentication: user:pass)
+- 🧪 Test Command: `curl -x http://192.168.1.37:8080 https://api.ipify.org`
+
 ### **Manual Setup (Advanced)**
 ```bash
 # 1. Clone and install dependencies

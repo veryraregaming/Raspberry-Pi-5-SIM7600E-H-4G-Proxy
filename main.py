@@ -339,8 +339,15 @@ def test_connection(config):
     print(f"🌐 Current Public IP: {current_ip}")
     print(f"🔄 IP Rotation: Every {interval_minutes} minutes")
     print(f"🔑 API Token: {token[:20]}...")
+    # Show test command based on authentication
+    proxy_user = config['proxy']['user']
+    proxy_pass = config['proxy']['password']
+    
     print("\n🧪 Test Commands:")
-    print(f"curl -x http://{lan_ip}:8080 https://api.ipify.org")
+    if proxy_user and proxy_pass:
+        print(f"curl -x http://{proxy_user}:{proxy_pass}@{lan_ip}:8080 https://api.ipify.org")
+    else:
+        print(f"curl -x http://{lan_ip}:8080 https://api.ipify.org")
     print(f"curl http://127.0.0.1:8088/status")
     print(f"# IP rotation: curl -X POST -H 'Authorization: YOUR_TOKEN' http://127.0.0.1:8088/rotate")
     print("\n🔧 PM2 Commands:")
