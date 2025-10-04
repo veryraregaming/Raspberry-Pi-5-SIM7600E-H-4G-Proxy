@@ -331,7 +331,7 @@ def test_connection(config):
     print("\n🧪 Test Commands:")
     print(f"curl -x http://{lan_ip}:8080 https://api.ipify.org")
     print(f"curl http://127.0.0.1:8088/status")
-    print(f"curl -X POST -H 'Authorization: {token}' http://127.0.0.1:8088/rotate")
+    print(f"# IP rotation: curl -X POST -H 'Authorization: YOUR_TOKEN' http://127.0.0.1:8088/rotate")
     print("\n🔧 PM2 Commands:")
     print("pm2 status          # View status")
     print("pm2 logs            # View logs")
@@ -340,6 +340,7 @@ def test_connection(config):
     print("\n⚙️  Configuration:")
     print("Edit config.yaml to change IP rotation interval, add auth, etc.")
     print("Then run: pm2 restart all")
+    print("\n🔑 Your API token is in config.yaml if you need it for IP rotation")
     print("=" * 60)
 
 def main():

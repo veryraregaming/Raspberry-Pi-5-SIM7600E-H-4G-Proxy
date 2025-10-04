@@ -47,6 +47,8 @@ sudo ./run.sh
 - 📡 HTTP Proxy: `192.168.1.37:8080`
 - 📡 SOCKS Proxy: `192.168.1.37:1080`
 - 🧪 Test command: `curl -x http://192.168.1.37:8080 https://api.ipify.org`
+- 🔄 IP rotation: Automatic every 5 minutes
+- 🔑 API token: Auto-generated and saved to config.yaml
 
 ### **Manual Setup (Advanced)**
 ```bash
@@ -96,10 +98,13 @@ curl http://127.0.0.1:8088/status
 ### POST /rotate
 Rotate public IP (requires token)
 ```bash
+# Get token from config.yaml first
 curl -X POST \
-  -H "Authorization: your-secure-token" \
+  -H "Authorization: YOUR_TOKEN_FROM_CONFIG" \
   http://127.0.0.1:8088/rotate
 ```
+
+**Note:** IP rotation happens automatically every 5 minutes, so manual rotation is usually not needed.
 
 ## 🔄 IP Rotation
 
@@ -108,8 +113,8 @@ IP rotation happens automatically every 5 minutes (configurable in `config.yaml`
 
 ### Manual Rotation
 ```bash
-# Using the API
-curl -X POST -H "Authorization: your-token" http://127.0.0.1:8088/rotate
+# Using the API (get token from config.yaml)
+curl -X POST -H "Authorization: YOUR_TOKEN" http://127.0.0.1:8088/rotate
 
 # Or directly via AT commands
 echo -e "AT+CGACT=0,1\r" | sudo tee /dev/ttyUSB2
