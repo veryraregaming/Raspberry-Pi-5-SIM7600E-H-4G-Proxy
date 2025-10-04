@@ -29,6 +29,7 @@ A lightweight 4G proxy solution for Raspberry Pi 5 with SIM7600E-H modem. Provid
 ```bash
 git clone <repository-url>
 cd Raspberry-Pi-5-SIM7600E-H-4G-Proxy
+chmod +x run.sh
 sudo ./run.sh
 ```
 
@@ -37,9 +38,11 @@ sudo ./run.sh
 # Clone to any directory
 git clone <repository-url> /home/user/my-proxy
 cd /home/user/my-proxy
+chmod +x run.sh
 sudo ./run.sh
 
 # Or run from anywhere
+chmod +x /path/to/your/proxy/run.sh
 sudo /path/to/your/proxy/run.sh
 ```
 
