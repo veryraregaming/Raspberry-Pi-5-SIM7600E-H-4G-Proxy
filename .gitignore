@@ -1,5 +1,7 @@
 # Configuration files with sensitive data
 config.yaml
+3proxy.cfg
+ecosystem.config.js
 
 # Python cache
 __pycache__/
