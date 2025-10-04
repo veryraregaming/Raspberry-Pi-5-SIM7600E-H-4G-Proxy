@@ -23,34 +23,35 @@ A lightweight 4G proxy solution for Raspberry Pi 5 with SIM7600E-H modem. Provid
 
 ## 🔧 Installation
 
-### 1. Clone Repository
+### **One-Command Setup (Recommended)**
 ```bash
 git clone <repository-url>
-cd raspi-4g-proxy-v2
+cd Raspberry-Pi-5-SIM7600E-H-4G-Proxy
+sudo ./run.sh
 ```
 
-### 2. Install Dependencies
+**That's it!** The script will:
+- ✅ Auto-detect your LAN IP
+- ✅ Generate secure tokens
+- ✅ Install all dependencies
+- ✅ Configure 3proxy
+- ✅ Setup network forwarding
+- ✅ Start all services
+
+### **Manual Setup (Advanced)**
 ```bash
+# 1. Clone and install dependencies
+git clone <repository-url>
+cd Raspberry-Pi-5-SIM7600E-H-4G-Proxy
 sudo apt update
-sudo apt install python3 python3-pip python3-yaml python3-serial python3-requests iptables -y
-pip3 install -r requirements.txt --break-system-packages
-```
+sudo apt install python3 python3-pip python3-yaml python3-serial python3-requests iptables 3proxy python3-flask -y
 
-**Note:** The `--break-system-packages` flag is required on Ubuntu 24.04+ to override system protection.
+# 2. Run automated setup
+sudo python3 main.py
 
-### 3. Configure
-```bash
+# 3. Or configure manually
 cp config.yaml.example config.yaml
 nano config.yaml
-```
-
-Edit `config.yaml`:
-- Set your LAN IP address
-- Generate a secure random token
-- Configure proxy credentials (or leave empty for no auth)
-
-### 4. Run
-```bash
 sudo python3 orchestrator.py
 ```
 
@@ -105,8 +106,10 @@ echo -e "AT+CGACT=1,1\r" | sudo tee /dev/ttyUSB2
 ## 📁 Project Structure
 
 ```
-raspi-4g-proxy-v2/
-├── orchestrator.py          # Main application
+Raspberry-Pi-5-SIM7600E-H-4G-Proxy/
+├── main.py                 # One-command automated setup
+├── run.sh                  # Simple setup script
+├── orchestrator.py         # Main application
 ├── config.yaml.example     # Configuration template
 ├── requirements.txt        # Python dependencies
 ├── scripts/

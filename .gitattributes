@@ -1,0 +1,5 @@
+# Ensure shell scripts are executable
+*.sh text eol=lf
+
+# Ensure Python scripts are executable
+*.py text eol=lf
