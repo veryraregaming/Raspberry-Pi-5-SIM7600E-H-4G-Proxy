@@ -237,25 +237,28 @@ def create_pm2_config():
     """Create PM2 ecosystem configuration."""
     print("🔧 Creating PM2 configuration...")
     
+    # Get the current script's directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
     config = {
         'apps': [
             {
                 'name': '4g-proxy-orchestrator',
                 'script': 'orchestrator.py',
                 'interpreter': 'python3',
-                'cwd': os.path.expanduser('~/Raspberry-Pi-5-SIM7600E-H-4G-Proxy'),
+                'cwd': script_dir,
                 'autorestart': True,
                 'max_restarts': 10,
                 'restart_delay': 5000,
                 'env': {
-                    'PYTHONPATH': os.path.expanduser('~/Raspberry-Pi-5-SIM7600E-H-4G-Proxy')
+                    'PYTHONPATH': script_dir
                 }
             },
             {
                 'name': '4g-proxy-3proxy',
                 'script': '3proxy',
                 'args': '3proxy.cfg',
-                'cwd': os.path.expanduser('~/Raspberry-Pi-5-SIM7600E-H-4G-Proxy'),
+                'cwd': script_dir,
                 'autorestart': True,
                 'max_restarts': 10,
                 'restart_delay': 5000
@@ -264,12 +267,12 @@ def create_pm2_config():
                 'name': '4g-proxy-auto-rotate',
                 'script': 'auto_rotate.py',
                 'interpreter': 'python3',
-                'cwd': os.path.expanduser('~/Raspberry-Pi-5-SIM7600E-H-4G-Proxy'),
+                'cwd': script_dir,
                 'autorestart': True,
                 'max_restarts': 10,
                 'restart_delay': 5000,
                 'env': {
-                    'PYTHONPATH': os.path.expanduser('~/Raspberry-Pi-5-SIM7600E-H-4G-Proxy')
+                    'PYTHONPATH': script_dir
                 }
             }
         ]

@@ -42,8 +42,9 @@ chmod +x /usr/local/bin/3proxy
 echo "🌐 Installing network tools..."
 apt install -y iptables
 
-# Return to project directory (use current user's home)
-cd "$HOME/Raspberry-Pi-5-SIM7600E-H-4G-Proxy"
+# Return to script's directory (works from anywhere)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
 # Make main.py executable
 chmod +x main.py
