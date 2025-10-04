@@ -49,6 +49,7 @@ if __name__ == '__main__':
     
     # Print startup info
     lan_ip = config['lan_bind_ip']
+    auth_enabled = config['proxy']['auth_enabled']
     proxy_user = config['proxy']['user']
     proxy_pass = config['proxy']['password']
     
@@ -58,7 +59,7 @@ if __name__ == '__main__':
     print(f"📡 HTTP Proxy: {lan_ip}:8080")
     print(f"📡 SOCKS Proxy: {lan_ip}:1080")
     
-    if proxy_user and proxy_pass:
+    if auth_enabled and proxy_user and proxy_pass:
         print(f"🔐 Authentication: {proxy_user}:{proxy_pass}")
         print(f"🧪 Test Command: curl -x http://{proxy_user}:{proxy_pass}@{lan_ip}:8080 https://api.ipify.org")
     else:

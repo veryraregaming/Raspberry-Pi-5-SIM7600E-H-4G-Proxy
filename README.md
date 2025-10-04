@@ -77,14 +77,15 @@ sudo python3 orchestrator.py
 
 ### config.yaml
 ```yaml
-lan_bind_ip: "192.168.1.37"   # Your Pi's LAN IP
+lan_bind_ip: "192.168.1.37"   # Your Pi's LAN IP (auto-detected)
 api:
   bind: "127.0.0.1"           # API bind address
   port: 8088                  # API port
-  token: "your-secure-token"  # API authentication token
+  token: "your-secure-token"  # API authentication token (auto-generated)
 proxy:
-  user: ""                    # Proxy username (empty = no auth)
-  password: ""                # Proxy password (empty = no auth)
+  auth_enabled: false         # Set to true to enable proxy authentication
+  user: ""                    # Proxy username (only used if auth_enabled: true)
+  password: ""                # Proxy password (only used if auth_enabled: true)
 pm2:
   enabled: true               # Enable PM2 process management
   auto_restart: true          # Auto-restart on crash

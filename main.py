@@ -131,6 +131,7 @@ def create_config():
             'token': token
         },
         'proxy': {
+            'auth_enabled': False,
             'user': '',
             'password': ''
         },
@@ -148,17 +149,46 @@ def create_config():
     
     print(f"  ✅ LAN IP: {lan_ip}")
     print(f"  ✅ API Token: {token[:20]}...")
-    print("  ✅ Proxy: No authentication")
+    print("  ✅ Proxy: No authentication (auth_enabled: false)")
     print("  ✅ PM2: Auto-restart enabled")
     print("  ✅ IP Rotation: Every 5 minutes")
     
     return config
 
-def create_3proxy_config():
+def create_3proxy_config(config):
     """Create 3proxy configuration."""
     print("🔧 Configuring 3proxy...")
     
-    config = """
+    # Check if authentication is enabled
+    auth_enabled = config['proxy']['auth_enabled']
+    proxy_user = config['proxy']['user']
+    proxy_pass = config['proxy']['password']
+    
+    if auth_enabled and proxy_user and proxy_pass:
+        # With authentication
+        proxy_config = f"""
+# 3proxy configuration with authentication
+nserver 8.8.8.8
+nserver 8.8.4.4
+
+# HTTP and SOCKS proxy with authentication
+proxy -p8080
+socks -p1080
+
+# Allow connections from LAN
+allow * * * 192.168.*.*
+allow * * * 127.0.0.1
+
+# Authentication
+auth strong
+users {proxy_user}:CL:{proxy_pass}
+allow {proxy_user}
+"""
+        print("  ✅ 3proxy configured for HTTP (8080) and SOCKS (1080)")
+        print(f"  ✅ Authentication enabled: {proxy_user}")
+    else:
+        # No authentication
+        proxy_config = """
 # 3proxy configuration
 nserver 8.8.8.8
 nserver 8.8.4.4
@@ -171,15 +201,14 @@ socks -p1080
 allow * * * 192.168.*.*
 allow * * * 127.0.0.1
 
-# No authentication by default
+# No authentication
 auth none
 """
+        print("  ✅ 3proxy configured for HTTP (8080) and SOCKS (1080)")
+        print("  ✅ No authentication required")
     
     with open('3proxy.cfg', 'w') as f:
-        f.write(config)
-    
-    print("  ✅ 3proxy configured for HTTP (8080) and SOCKS (1080)")
-    print("  ✅ No authentication required")
+        f.write(proxy_config)
 
 def setup_network():
     """Setup network forwarding and NAT."""
@@ -340,11 +369,12 @@ def test_connection(config):
     print(f"🔄 IP Rotation: Every {interval_minutes} minutes")
     print(f"🔑 API Token: {token[:20]}...")
     # Show test command based on authentication
+    auth_enabled = config['proxy']['auth_enabled']
     proxy_user = config['proxy']['user']
     proxy_pass = config['proxy']['password']
     
     print("\n🧪 Test Commands:")
-    if proxy_user and proxy_pass:
+    if auth_enabled and proxy_user and proxy_pass:
         print(f"curl -x http://{proxy_user}:{proxy_pass}@{lan_ip}:8080 https://api.ipify.org")
     else:
         print(f"curl -x http://{lan_ip}:8080 https://api.ipify.org")
@@ -379,7 +409,7 @@ def main():
         config = create_config()
         
         # Setup 3proxy
-        create_3proxy_config()
+        create_3proxy_config(config)
         
         # Setup network
         if not setup_network():
