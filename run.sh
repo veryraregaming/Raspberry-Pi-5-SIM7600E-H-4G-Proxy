@@ -311,11 +311,31 @@ eval "${START_CMD}" || true
 echo "==> Waiting for services to start…"
 sleep 5
 
-# Check if Squid is running
+# Check if Squid is running and fix if needed
 if sudo ss -ltnp | grep -q ":3128"; then
   echo "✅ Squid proxy is running on port 3128"
 else
-  echo "⚠️  Squid proxy not detected on port 3128"
+  echo "⚠️  Squid proxy not detected on port 3128, fixing..."
+  
+  # Fix squid.conf permissions if needed
+  if [[ -f "${SCRIPT_DIR}/squid.conf" ]]; then
+    sudo chown proxyuser:proxyuser "${SCRIPT_DIR}/squid.conf" 2>/dev/null || true
+    sudo chmod 644 "${SCRIPT_DIR}/squid.conf" 2>/dev/null || true
+  fi
+  
+  # Ensure run_squid.sh is executable
+  chmod +x "${SCRIPT_DIR}/run_squid.sh" 2>/dev/null || true
+  
+  # Restart PM2 services
+  sudo -u "${REAL_USER}" pm2 restart all || true
+  sleep 3
+  
+  # Check again
+  if sudo ss -ltnp | grep -q ":3128"; then
+    echo "✅ Squid proxy is now running on port 3128"
+  else
+    echo "⚠️  Squid proxy still not running, but continuing..."
+  fi
 fi
 
 # Check if API is running
