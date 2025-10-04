@@ -45,10 +45,29 @@ def generate_token():
     return secrets.token_urlsafe(64)
 
 def detect_modem_port():
+    # Try common ports in order of likelihood
+    common_ports = ['/dev/ttyUSB2', '/dev/ttyUSB1', '/dev/ttyUSB0', '/dev/ttyUSB3', '/dev/ttyUSB4']
+    
+    for port in common_ports:
+        if os.path.exists(port):
+            # Test if modem responds on this port
+            try:
+                with serial.Serial(port, 115200, timeout=1) as ser:
+                    ser.write(b'AT\r\n')
+                    time.sleep(0.5)
+                    response = ser.read_all().decode(errors='ignore')
+                    if "OK" in response:
+                        print(f"  ✅ Modem responding on {port}")
+                        return port
+            except:
+                continue
+    
+    # Fallback to any available ttyUSB
     for dev in os.listdir('/dev'):
         if dev.startswith('ttyUSB'):
             return f'/dev/{dev}'
-    return '/dev/ttyUSB2'
+    
+    return '/dev/ttyUSB2'  # Default fallback
 
 def send_at_command(cmd, port=None, timeout=2):
     """Send AT command to modem and return response"""
@@ -66,19 +85,52 @@ def send_at_command(cmd, port=None, timeout=2):
         return ""
 
 def activate_modem():
-    """Activate SIM7600E-H modem in direct mode"""
+    """Activate SIM7600E-H modem using ModemManager"""
     print("📡 Activating SIM7600E-H modem...")
-    port = detect_modem_port()
     
     # Load config to get APN
     try:
         with open("config.yaml", "r") as f:
             config = yaml.safe_load(f)
-        apn = config.get("modem", {}).get("apn", "internet")
+        apn = config.get("modem", {}).get("apn", "everywhere")
     except:
-        apn = "internet"
+        apn = "everywhere"
     
     print(f"  📡 Using APN: {apn}")
+    
+    # Try ModemManager first (more reliable)
+    print("  🔄 Trying ModemManager connection...")
+    result = run_cmd(f"sudo mmcli -m 0 --simple-connect=\"apn={apn}\"", check=False)
+    
+    if "successfully connected" in result[0].lower():
+        print("  ✅ ModemManager connected successfully")
+        # Wait a moment for interface to come up
+        time.sleep(3)
+        
+        # Check if wwan0 got an IPv4 address
+        ipv4_check = run_cmd("ip -4 addr show wwan0", check=False)
+        if "inet " in ipv4_check[0]:
+            print("  ✅ wwan0 has IPv4 address")
+            return True
+        else:
+            print("  ⚠️ wwan0 only has IPv6, trying to get IPv4...")
+            # Try to get IPv4 address
+            run_cmd("sudo dhclient -4 wwan0", check=False)
+            time.sleep(2)
+            
+            # Check again
+            ipv4_check = run_cmd("ip -4 addr show wwan0", check=False)
+            if "inet " in ipv4_check[0]:
+                print("  ✅ wwan0 now has IPv4 address")
+                return True
+            else:
+                print("  ⚠️ Still no IPv4, but interface is up")
+                return True  # Continue anyway, might work with IPv6
+    
+    print("  ⚠️ ModemManager failed, trying direct AT commands...")
+    
+    # Fallback to direct AT commands
+    port = detect_modem_port()
     
     # Check if modem responds
     response = send_at_command("AT", port)
@@ -111,29 +163,41 @@ def activate_modem():
         print("  ✅ Modem activated with IP address")
         return True
     else:
-        print("  ⚠️ Modem activated but no IP address")
-        # Try with common APNs if configured APN doesn't work
+        print("  ⚠️ Configured APN failed, trying all APNs automatically...")
+        # Always try all APNs to find the right one
         return try_common_apns(port)
 
 def try_common_apns(port):
     """Try common APN configurations if default fails"""
-    print("  🔄 Trying common APNs...")
+    print("  🔄 Trying APNs from apn.txt...")
     
-    # Common APNs for different carriers
-    apns = [
-        "internet",     # Generic
-        "web",          # Some carriers
-        "data",         # Some carriers  
-        "broadband",    # Some carriers
-        "mobile",       # Some carriers
-        "3gnet",        # Some carriers
-        "fast.t-mobile.com",  # T-Mobile
-        "broadband",    # Verizon
-        "internet",     # AT&T
-        "internet",     # EE (UK)
-        "internet",     # Vodafone
-        "internet",     # Three
-    ]
+    # Load APNs from apn.txt file
+    apns = []
+    try:
+        with open("apn.txt", "r") as f:
+            for line in f:
+                line = line.strip()
+                # Skip empty lines and comments
+                if line and not line.startswith("#"):
+                    apns.append(line)
+        print(f"  📋 Loaded {len(apns)} APNs from apn.txt")
+    except FileNotFoundError:
+        print("  ⚠️ apn.txt not found, using default APNs")
+        # Fallback to hardcoded list
+        apns = [
+            "everywhere",   # EE (UK) - most common
+            "internet",     # Generic
+            "web",          # Some carriers
+            "data",         # Some carriers  
+            "broadband",    # Some carriers
+            "mobile",       # Some carriers
+            "3gnet",        # Some carriers
+            "fast.t-mobile.com",  # T-Mobile
+            "broadband",    # Verizon
+            "internet",     # AT&T
+            "internet",     # Vodafone
+            "internet",     # Three
+        ]
     
     for apn in apns:
         print(f"  📤 Trying APN: {apn}")
@@ -191,7 +255,7 @@ def create_config():
         "api": {"bind": "127.0.0.1", "port": 8088, "token": token},
         "proxy": {"auth_enabled": False, "user": "", "password": ""},
         "modem": {
-            "apn": "internet",  # Default APN, can be overridden
+            "apn": "everywhere",  # Default APN for EE (UK), can be overridden
             "port": "/dev/ttyUSB2",  # Default port, auto-detected
             "timeout": 2
         },
@@ -201,7 +265,7 @@ def create_config():
         yaml.dump(cfg, f, default_flow_style=False)
     print(f"  ✅ LAN IP: {lan_ip}")
     print(f"  ✅ API Token: {token[:20]}…")
-    print(f"  ✅ Default APN: internet (edit config.yaml to customize)")
+    print(f"  ✅ Default APN: everywhere (EE UK - edit config.yaml to customize)")
     print("  ✅ Proxy auth: disabled (edit config.yaml later if you want auth)")
     return cfg
 
@@ -281,10 +345,10 @@ def setup_network():
     try:
         with open("config.yaml", "r") as f:
             config = yaml.safe_load(f)
-        apn = config.get("modem", {}).get("apn", "internet")
+        apn = config.get("modem", {}).get("apn", "everywhere")
         print(f"  📡 Using APN: {apn}")
     except:
-        apn = "internet"
+        apn = "everywhere"
         print(f"  📡 Using default APN: {apn}")
     
     # First activate the modem

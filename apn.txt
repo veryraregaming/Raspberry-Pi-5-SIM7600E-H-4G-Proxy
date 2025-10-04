@@ -1,0 +1,30 @@
+# APN list for automatic carrier detection
+# Format: one APN per line, comments start with #
+# The system will try these in order until one works
+
+# EE (UK) - your carrier
+everywhere
+
+# Generic APNs that work for most carriers
+internet
+web
+data
+broadband
+mobile
+3gnet
+
+# Carrier-specific APNs
+fast.t-mobile.com
+broadband
+internet
+internet
+internet
+internet
+
+# Additional common APNs
+wap
+gprs
+mms
+hsdpa
+umts
+lte

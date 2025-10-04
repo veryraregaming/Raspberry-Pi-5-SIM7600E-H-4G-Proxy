@@ -63,7 +63,7 @@ apt-get update -y
 DEBS=(
   curl wget unzip build-essential iptables python3 python3-pip
   python3-yaml python3-serial python3-requests python3-flask
-  ca-certificates gnupg
+  ca-certificates gnupg modemmanager
 )
 apt-get install -y "${DEBS[@]}"
 
@@ -88,6 +88,87 @@ fi
 echo "✅ Squid installed"
 
 # ---- Ensure helper scripts exist (idempotent) ------------------------------
+# Create apn.txt if it doesn't exist
+if [[ ! -f "${SCRIPT_DIR}/apn.txt" ]]; then
+  echo "==> Creating apn.txt with common APNs…"
+  cat > "${SCRIPT_DIR}/apn.txt" <<'EOF'
+# APN list for automatic carrier detection
+# Format: one APN per line, comments start with #
+# The system will try these in order until one works
+
+# EE (UK) - your carrier
+everywhere
+
+# Generic APNs that work for most carriers
+internet
+web
+data
+broadband
+mobile
+3gnet
+
+# Carrier-specific APNs
+fast.t-mobile.com
+broadband
+internet
+internet
+internet
+internet
+
+# Additional common APNs
+wap
+gprs
+mms
+hsdpa
+umts
+lte
+EOF
+fi
+
+# Create run_squid.sh if it doesn't exist
+if [[ ! -f "${SCRIPT_DIR}/run_squid.sh" ]]; then
+  echo "==> Creating run_squid.sh…"
+  cat > "${SCRIPT_DIR}/run_squid.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CFG="${SCRIPT_DIR}/squid.conf"
+PROXY_USER="proxyuser"
+
+# Check if squid is installed
+if ! command -v squid >/dev/null; then
+  echo "Squid not found. Installing..."
+  sudo apt update
+  sudo apt install -y squid
+fi
+
+# Ensure proxyuser exists
+if ! id -u "${PROXY_USER}" >/dev/null 2>&1; then
+  sudo useradd --system --no-create-home --shell /usr/sbin/nologin "${PROXY_USER}"
+fi
+
+# Check if config file exists
+if [[ ! -f "${CFG}" ]]; then
+  echo "Squid config not found at ${CFG}"
+  exit 1
+fi
+
+# Create log directory
+sudo mkdir -p /var/log/squid
+sudo chown proxyuser:proxyuser /var/log/squid
+
+# Create cache directory
+sudo mkdir -p /var/spool/squid
+sudo chown proxyuser:proxyuser /var/spool/squid
+
+# Start squid
+echo "Starting Squid with config: ${CFG}"
+exec sudo -u "${PROXY_USER}" squid -N -f "${CFG}"
+EOF
+  chmod +x "${SCRIPT_DIR}/run_squid.sh"
+fi
+
 # 4gproxy-net.sh — safe policy routing (no default route change)
 cat > "${SCRIPT_DIR}/4gproxy-net.sh" <<'EOSH'
 #!/usr/bin/env bash
