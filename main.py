@@ -105,7 +105,13 @@ def activate_modem():
     
     # Try ModemManager first (more reliable)
     print("  🔄 Trying ModemManager connection...")
-    result = run_cmd(f"sudo mmcli -m 0 --simple-connect=\"apn={apn}\"", check=False)
+    
+    # Use EE secure credentials if APN is "everywhere"
+    if apn == "everywhere":
+        print("  📡 Using EE secure credentials...")
+        result = run_cmd(f"sudo mmcli -m 0 --simple-connect=\"apn={apn},user=eesecure,password=secure,ip-type=ipv4\"", check=False)
+    else:
+        result = run_cmd(f"sudo mmcli -m 0 --simple-connect=\"apn={apn},ip-type=ipv4\"", check=False)
     
     if "successfully connected" in result[0].lower():
         print("  ✅ ModemManager connected successfully")
@@ -192,7 +198,7 @@ def activate_modem():
         "AT+CPIN?",            # Check SIM status
         "AT+CREG?",            # Check network registration
         "AT+CGATT?",           # Check GPRS attachment
-        f"AT+CGDCONT=1,\"IP\",\"{apn}\"",  # Configure PDP context with configured APN
+        f"AT+CGDCONT=1,\"IP\",\"{apn}\",\"0.0.0.0\",0,0",  # Configure PDP context with configured APN
         "AT+CGACT=1,1",        # Activate PDP context
         "AT+CGPADDR"           # Get IP address
     ]
@@ -248,8 +254,8 @@ def try_common_apns(port):
     for apn in apns:
         print(f"  📤 Trying APN: {apn}")
         
-        # Configure PDP context with specific APN
-        send_at_command("AT+CGDCONT=1,\"IP\",\"" + apn + "\"", port)
+               # Configure PDP context with specific APN
+               send_at_command("AT+CGDCONT=1,\"IP\",\"" + apn + "\",\"0.0.0.0\",0,0", port)
         time.sleep(1)
         
         # Activate PDP context
