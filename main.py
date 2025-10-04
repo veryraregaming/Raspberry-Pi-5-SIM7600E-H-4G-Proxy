@@ -420,6 +420,11 @@ dns_nameservers 8.8.8.8 8.8.4.4
 """
     with open("squid.conf","w") as f:
         f.write(proxy_cfg)
+    
+    # Fix permissions for proxyuser
+    run_cmd("sudo chown proxyuser:proxyuser squid.conf", check=False)
+    run_cmd("sudo chmod 644 squid.conf", check=False)
+    
     print("  ✅ squid.conf ready (HTTP:3128 on LAN IP)")
 
 # ----------------- networking -----------------
