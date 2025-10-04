@@ -25,7 +25,7 @@ def at(cmd):
 @app.route('/status')
 def status():
     pdp = at('AT+CGPADDR')
-    pub = requests.get('https://ifconfig.co/ip', timeout=10).text.strip()
+    pub = requests.get('https://ipv4.icanhazip.com', timeout=10).text.strip()
     return jsonify({'pdp': pdp, 'public_ip': pub})
 
 @app.route('/rotate', methods=['POST'])
@@ -40,7 +40,7 @@ def rotate():
     at('AT+CGACT=1,1')
     time.sleep(4)
     pdp = at('AT+CGPADDR')
-    pub = requests.get('https://ifconfig.co/ip', timeout=10).text.strip()
+    pub = requests.get('https://ipv4.icanhazip.com', timeout=10).text.strip()
     return jsonify({'pdp': pdp, 'public_ip': pub})
 
 if __name__ == '__main__':
