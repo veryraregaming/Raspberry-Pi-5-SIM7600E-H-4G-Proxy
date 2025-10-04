@@ -15,16 +15,23 @@ ip -o link show | awk -F': ' '{print $2}' | grep -v lo
 
 # Try multiple patterns for cellular interfaces (EXCLUDING eth0/wlan0)
 CELL_IFACE=""
-for pattern in 'wwan' 'ppp' 'usb' 'eth1' 'eth2' 'eth3' 'enx' 'cdc'; do
-  CELL_IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -E "^${pattern}" | head -n1 || true)
-  if [[ -n "${CELL_IFACE:-}" ]]; then
-    # CRITICAL: Never use eth0 or wlan0 (home network interfaces)
-    if [[ "${CELL_IFACE}" == "eth0" || "${CELL_IFACE}" == "wlan0" ]]; then
-      echo "[4gproxy-net] Skipping ${CELL_IFACE} (home network interface)"
-      CELL_IFACE=""
-      continue
-    fi
-    # For direct modem mode, we might not have an IP on the interface
+
+# Check for ppp0 first (PPP connection)
+if ip -4 addr show ppp0 2>/dev/null | grep -q "inet "; then
+  CELL_IFACE="ppp0"
+  echo "[4gproxy-net] Found active cellular interface: ppp0 (PPP)"
+else
+  # Fallback to other patterns
+  for pattern in 'wwan' 'ppp' 'usb' 'eth1' 'eth2' 'eth3' 'enx' 'cdc'; do
+    CELL_IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -E "^${pattern}" | head -n1 || true)
+    if [[ -n "${CELL_IFACE:-}" ]]; then
+      # CRITICAL: Never use eth0 or wlan0 (home network interfaces)
+      if [[ "${CELL_IFACE}" == "eth0" || "${CELL_IFACE}" == "wlan0" ]]; then
+        echo "[4gproxy-net] Skipping ${CELL_IFACE} (home network interface)"
+        CELL_IFACE=""
+        continue
+      fi
+      # For direct modem mode, we might not have an IP on the interface
     # Check if interface exists and is up
     if ip link show "${CELL_IFACE}" | grep -q "state UP\|state UNKNOWN"; then
       echo "[4gproxy-net] Found cellular interface: ${CELL_IFACE} (pattern: ${pattern})"

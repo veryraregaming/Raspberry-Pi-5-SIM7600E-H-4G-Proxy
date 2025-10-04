@@ -70,6 +70,54 @@ def detect_modem_port():
     
     return '/dev/ttyUSB2'  # Default fallback
 
+def create_ppp_config(apn, port):
+    """Create PPP configuration files"""
+    # Create chat script
+    chat_script = f'''ABORT 'BUSY'
+ABORT 'NO CARRIER'
+ABORT 'ERROR'
+ABORT 'NO DIALTONE'
+ABORT 'NO ANSWER'
+REPORT CONNECT
+TIMEOUT 60
+'' AT
+OK 'ATZ'
+OK 'AT+CPIN?'
+OK 'AT+CFUN=1'
+OK 'AT+CGATT=1'
+OK 'AT+CGDCONT=1,"IP","{apn}"'
+OK 'ATD*99#'
+CONNECT '''''
+    
+    run_cmd("sudo mkdir -p /etc/chatscripts", check=False)
+    with open("/tmp/ee-chat", "w") as f:
+        f.write(chat_script)
+    run_cmd("sudo cp /tmp/ee-chat /etc/chatscripts/ee-chat", check=False)
+    run_cmd("sudo chmod 644 /etc/chatscripts/ee-chat", check=False)
+    
+    # Create peer file
+    peer_config = f'''{port}
+115200
+crtscts
+lock
+noauth
+defaultroute
+usepeerdns
+persist
+hide-password
+ipcp-accept-local
+ipcp-accept-remote
+lcp-echo-interval 10
+lcp-echo-failure 6
+debug
+logfile /var/log/ppp-sim7600.log
+connect "/usr/sbin/chat -v -f /etc/chatscripts/ee-chat"'''
+    
+    with open("/tmp/sim7600", "w") as f:
+        f.write(peer_config)
+    run_cmd("sudo cp /tmp/sim7600 /etc/ppp/peers/sim7600", check=False)
+    run_cmd("sudo chmod 644 /etc/ppp/peers/sim7600", check=False)
+
 def send_at_command(cmd, port=None, timeout=2):
     """Send AT command to modem and return response"""
     if port is None:
@@ -109,7 +157,7 @@ def load_carrier_config(apn):
         }
 
 def activate_modem():
-    """Activate SIM7600E-H modem using ModemManager"""
+    """Activate SIM7600E-H modem using PPP"""
     print("📡 Activating SIM7600E-H modem...")
     
     # Load config to get APN
@@ -124,21 +172,41 @@ def activate_modem():
     carrier = load_carrier_config(apn)
     print(f"  📡 Using APN: {apn} ({carrier['name']})")
     
-    # Reset modem first to clear any stuck state
-    print("  🔄 Resetting modem...")
-    run_cmd("sudo mmcli -m 0 --reset", check=False)
-    time.sleep(5)
+    # Stop conflicts
+    print("  🔄 Stopping conflicts...")
+    run_cmd("sudo systemctl stop ModemManager", check=False)
+    run_cmd("sudo pkill pppd", check=False)
+    time.sleep(2)
     
-    # Try ModemManager first (more reliable)
-    print("  🔄 Trying ModemManager connection...")
+    # Install PPP if needed
+    print("  📦 Installing PPP...")
+    run_cmd("sudo apt update", check=False)
+    run_cmd("sudo apt install -y ppp", check=False)
     
-    # Build connection string with carrier credentials
-    if carrier["username"] and carrier["password"]:
-        print(f"  📡 Using {carrier['name']} credentials...")
-        result = run_cmd(f"sudo mmcli -m 0 --simple-connect=\"apn={apn},user={carrier['username']},password={carrier['password']},ip-type=ipv4\"", check=False)
-    else:
-        print(f"  📡 Using {carrier['name']} (no auth)...")
-        result = run_cmd(f"sudo mmcli -m 0 --simple-connect=\"apn={apn},ip-type=ipv4\"", check=False)
+    # Detect AT port
+    print("  🔍 Detecting AT port...")
+    port = detect_modem_port()
+    print(f"  📡 Using AT port: {port}")
+    
+    # Create PPP configuration
+    print("  🔧 Creating PPP configuration...")
+    create_ppp_config(apn, port)
+    
+    # Start PPP connection
+    print("  🚀 Starting PPP connection...")
+    run_cmd("sudo pppd call sim7600", check=False)
+    
+    # Wait for ppp0 to come up
+    print("  ⏳ Waiting for ppp0...")
+    for i in range(30):
+        time.sleep(1)
+        result = run_cmd("ip -4 addr show dev ppp0", check=False)
+        if "inet " in result[0]:
+            print("  ✅ ppp0 is up with IPv4")
+            return True
+    
+    print("  ⚠️ ppp0 did not come up, trying fallback...")
+    return False
     
     if "successfully connected" in result[0].lower():
         print("  ✅ ModemManager connected successfully")
