@@ -238,13 +238,19 @@ def activate_modem():
     
     # Check if we got an IP
     ip_response = send_at_command("AT+CGPADDR", port)
-    if "+CGPADDR: 1," in ip_response and "0.0.0.0" not in ip_response:
-        print("  ✅ Modem activated with IP address")
-        return True
-    else:
-        print("  ⚠️ Configured APN failed, trying all APNs automatically...")
-        # Always try all APNs to find the right one
-        return try_common_apns(port)
+    print(f"  📥 {ip_response}")
+    
+    # Check if we got a valid IP address (not 0.0.0.0)
+    if "+CGPADDR: 1," in ip_response:
+        # Extract the IP from the response
+        ip_line = [line for line in ip_response.split('\n') if '+CGPADDR: 1,' in line]
+        if ip_line and "0.0.0.0" not in ip_line[0]:
+            print("  ✅ Modem activated with IP address")
+            return True
+    
+    print("  ⚠️ Configured APN failed, trying all APNs automatically...")
+    # Always try all APNs to find the right one
+    return try_common_apns(port)
 
 def try_common_apns(port):
     """Try common APN configurations if default fails"""
@@ -291,9 +297,13 @@ def try_common_apns(port):
         ip_response = send_at_command("AT+CGPADDR", port)
         print(f"  📥 {ip_response}")
         
-        if "+CGPADDR: 1," in ip_response and "0.0.0.0" not in ip_response:
-            print(f"  ✅ Success with APN: {apn} ({name})")
-            return True
+        # Check if we got a valid IP address (not 0.0.0.0)
+        if "+CGPADDR: 1," in ip_response:
+            # Extract the IP from the response
+            ip_line = [line for line in ip_response.split('\n') if '+CGPADDR: 1,' in line]
+            if ip_line and "0.0.0.0" not in ip_line[0]:
+                print(f"  ✅ Success with APN: {apn} ({name})")
+                return True
     
     print("  ❌ No working APN found")
     return False
