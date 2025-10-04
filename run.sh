@@ -38,6 +38,9 @@ make -f Makefile.Linux
 cp bin/3proxy /usr/local/bin/
 chmod +x /usr/local/bin/3proxy
 
+# Return to project directory
+cd "$HOME/Raspberry-Pi-5-SIM7600E-H-4G-Proxy"
+
 # Install iptables
 echo "🌐 Installing network tools..."
 apt install -y iptables
