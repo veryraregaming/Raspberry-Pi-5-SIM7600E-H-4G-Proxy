@@ -45,6 +45,7 @@ apt install -y iptables
 # Return to script's directory (works from anywhere)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+echo "📁 Working directory: $(pwd)"
 
 # Make main.py executable
 chmod +x main.py
