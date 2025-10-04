@@ -291,7 +291,7 @@ def start_services():
     print("  ✅ Auto-restart enabled")
     print("  ✅ PM2 will start on boot")
 
-def test_connection():
+def test_connection(config):
     """Test the proxy connection."""
     print("🧪 Testing connection...")
     
@@ -317,6 +317,30 @@ def test_connection():
             print("  ⚠️  Proxy test failed")
     except:
         print("  ⚠️  Proxy test failed")
+    
+    # Show test commands
+    lan_ip = config['lan_bind_ip']
+    token = config['api']['token']
+    
+    print("\n" + "=" * 60)
+    print("🎉 SETUP COMPLETE! Your 4G proxy is ready!")
+    print("=" * 60)
+    print(f"📡 HTTP Proxy: {lan_ip}:8080")
+    print(f"📡 SOCKS Proxy: {lan_ip}:1080")
+    print(f"🔑 API Token: {token[:20]}...")
+    print("\n🧪 Test Commands:")
+    print(f"curl -x http://{lan_ip}:8080 https://api.ipify.org")
+    print(f"curl http://127.0.0.1:8088/status")
+    print(f"curl -X POST -H 'Authorization: {token}' http://127.0.0.1:8088/rotate")
+    print("\n🔧 PM2 Commands:")
+    print("pm2 status          # View status")
+    print("pm2 logs            # View logs")
+    print("pm2 restart all     # Restart services")
+    print("pm2 monit           # Monitor in real-time")
+    print("\n⚙️  Configuration:")
+    print("Edit config.yaml to change IP rotation interval, add auth, etc.")
+    print("Then run: pm2 restart all")
+    print("=" * 60)
 
 def main():
     """Main setup function."""
@@ -346,16 +370,7 @@ def main():
         start_services()
         
         # Test connection
-        test_connection()
-        
-        print("\n" + "=" * 50)
-        print("🎉 Setup complete!")
-        print(f"📡 Proxy available at: {config['lan_bind_ip']}:8080 (HTTP)")
-        print(f"📡 SOCKS proxy at: {config['lan_bind_ip']}:1080")
-        print(f"🔑 API token: {config['api']['token'][:20]}...")
-        print("📊 API status: http://127.0.0.1:8088/status")
-        print("🔄 IP rotation: curl -X POST -H 'Authorization: YOUR_TOKEN' http://127.0.0.1:8088/rotate")
-        print("=" * 50)
+        test_connection(config)
         
     except KeyboardInterrupt:
         print("\n❌ Setup cancelled by user")

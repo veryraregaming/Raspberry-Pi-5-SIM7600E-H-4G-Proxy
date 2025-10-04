@@ -41,6 +41,12 @@ sudo ./run.sh
 - ✅ Start all services with PM2
 - ✅ Enable auto IP rotation (every 5 minutes)
 - ✅ Configure auto-restart on boot
+- ✅ Show test commands and proxy details
+
+**After setup, you'll see:**
+- 📡 HTTP Proxy: `192.168.1.37:8080`
+- 📡 SOCKS Proxy: `192.168.1.37:1080`
+- 🧪 Test command: `curl -x http://192.168.1.37:8080 https://api.ipify.org`
 
 ### **Manual Setup (Advanced)**
 ```bash
@@ -144,6 +150,21 @@ pm2 monit
 - **`4g-proxy-orchestrator`** - Main API server
 - **`4g-proxy-3proxy`** - HTTP/SOCKS proxy
 - **`4g-proxy-auto-rotate`** - Automatic IP rotation
+
+### Customization
+```bash
+# Edit configuration
+nano config.yaml
+
+# Restart services to apply changes
+pm2 restart all
+```
+
+**Configurable options:**
+- IP rotation interval (default: 5 minutes)
+- Proxy authentication (username/password)
+- API token
+- LAN IP address
 
 ## 🛡️ Security Notes
 
