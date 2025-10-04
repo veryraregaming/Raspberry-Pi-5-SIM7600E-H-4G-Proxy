@@ -19,7 +19,13 @@ apt update
 
 # Install Python dependencies
 echo "🐍 Installing Python dependencies..."
-apt install -y python3 python3-pip python3-yaml python3-serial python3-requests python3-flask
+apt install -y python3 python3-pip python3-yaml python3-serial python3-requests python3-flask curl
+
+# Install Node.js and PM2
+echo "🔧 Installing Node.js and PM2..."
+curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+apt install -y nodejs
+npm install -g pm2
 
 # Install 3proxy from source
 echo "🔧 Installing 3proxy from source..."

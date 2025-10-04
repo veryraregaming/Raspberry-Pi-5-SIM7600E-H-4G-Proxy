@@ -65,6 +65,19 @@ def at_command(cmd):
     except:
         return ""
 
+def install_pm2():
+    """Install Node.js and PM2."""
+    print("  Installing Node.js and PM2...")
+    
+    # Install Node.js
+    run_command("curl -fsSL https://deb.nodesource.com/setup_18.x | bash -", check=False)
+    run_command("apt install -y nodejs", check=False)
+    
+    # Install PM2 globally
+    run_command("npm install -g pm2", check=False)
+    
+    print("  ✅ PM2 installed for process management")
+
 def install_3proxy():
     """Install 3proxy from source."""
     print("  Installing 3proxy from source...")
@@ -88,7 +101,7 @@ def install_dependencies():
     # System packages
     packages = [
         "python3", "python3-pip", "python3-yaml", "python3-serial", 
-        "python3-requests", "iptables", "python3-flask", "build-essential", "wget", "unzip"
+        "python3-requests", "iptables", "python3-flask", "build-essential", "wget", "unzip", "curl"
     ]
     
     for package in packages:
@@ -96,6 +109,9 @@ def install_dependencies():
         stdout, stderr = run_command(f"apt install {package} -y", check=False)
         if stderr and "already the newest version" not in stderr:
             print(f"  Warning: {stderr}")
+    
+    # Install Node.js and PM2
+    install_pm2()
     
     # Install 3proxy from source (not available in Ubuntu repos)
     install_3proxy()
@@ -117,6 +133,13 @@ def create_config():
         'proxy': {
             'user': '',
             'password': ''
+        },
+        'pm2': {
+            'enabled': True,
+            'auto_restart': True,
+            'ip_rotation_interval': 300,  # 5 minutes
+            'max_restarts': 10,
+            'restart_delay': 5000
         }
     }
     
@@ -126,6 +149,8 @@ def create_config():
     print(f"  ✅ LAN IP: {lan_ip}")
     print(f"  ✅ API Token: {token[:20]}...")
     print("  ✅ Proxy: No authentication")
+    print("  ✅ PM2: Auto-restart enabled")
+    print("  ✅ IP Rotation: Every 5 minutes")
     
     return config
 
@@ -179,21 +204,92 @@ def setup_network():
     print("  ✅ NAT and forwarding configured")
     return True
 
+def create_pm2_config():
+    """Create PM2 ecosystem configuration."""
+    print("🔧 Creating PM2 configuration...")
+    
+    config = {
+        'apps': [
+            {
+                'name': '4g-proxy-orchestrator',
+                'script': 'orchestrator.py',
+                'interpreter': 'python3',
+                'cwd': '/home/rare/Raspberry-Pi-5-SIM7600E-H-4G-Proxy',
+                'autorestart': True,
+                'max_restarts': 10,
+                'restart_delay': 5000,
+                'env': {
+                    'PYTHONPATH': '/home/rare/Raspberry-Pi-5-SIM7600E-H-4G-Proxy'
+                }
+            },
+            {
+                'name': '4g-proxy-3proxy',
+                'script': '3proxy',
+                'args': '3proxy.cfg',
+                'cwd': '/home/rare/Raspberry-Pi-5-SIM7600E-H-4G-Proxy',
+                'autorestart': True,
+                'max_restarts': 10,
+                'restart_delay': 5000
+            },
+            {
+                'name': '4g-proxy-auto-rotate',
+                'script': 'auto_rotate.py',
+                'interpreter': 'python3',
+                'cwd': '/home/rare/Raspberry-Pi-5-SIM7600E-H-4G-Proxy',
+                'autorestart': True,
+                'max_restarts': 10,
+                'restart_delay': 5000,
+                'env': {
+                    'PYTHONPATH': '/home/rare/Raspberry-Pi-5-SIM7600E-H-4G-Proxy'
+                }
+            }
+        ]
+    }
+    
+    with open('ecosystem.config.js', 'w') as f:
+        f.write('module.exports = {\n')
+        f.write('  apps: [\n')
+        for app in config['apps']:
+            f.write('    {\n')
+            for key, value in app.items():
+                if isinstance(value, str):
+                    f.write(f'      {key}: "{value}",\n')
+                elif isinstance(value, bool):
+                    f.write(f'      {key}: {str(value).lower()},\n')
+                elif isinstance(value, int):
+                    f.write(f'      {key}: {value},\n')
+                elif isinstance(value, dict):
+                    f.write(f'      {key}: {{\n')
+                    for env_key, env_value in value.items():
+                        f.write(f'        {env_key}: "{env_value}"\n')
+                    f.write('      },\n')
+            f.write('    },\n')
+        f.write('  ]\n')
+        f.write('}\n')
+    
+    print("  ✅ PM2 ecosystem configuration created")
+
 def start_services():
-    """Start the proxy services."""
-    print("🚀 Starting services...")
+    """Start the proxy services with PM2."""
+    print("🚀 Starting services with PM2...")
     
-    # Start 3proxy in background
-    print("  Starting 3proxy...")
-    run_command("3proxy 3proxy.cfg &", check=False)
-    time.sleep(2)
+    # Create PM2 configuration
+    create_pm2_config()
     
-    # Start the orchestrator
-    print("  Starting orchestrator...")
-    run_command("python3 orchestrator.py &", check=False)
-    time.sleep(2)
+    # Start services with PM2
+    print("  Starting services...")
+    run_command("pm2 start ecosystem.config.js", check=False)
+    time.sleep(3)
     
-    print("  ✅ Services started")
+    # Save PM2 configuration
+    run_command("pm2 save", check=False)
+    
+    # Setup PM2 to start on boot
+    run_command("pm2 startup", check=False)
+    
+    print("  ✅ Services started with PM2")
+    print("  ✅ Auto-restart enabled")
+    print("  ✅ PM2 will start on boot")
 
 def test_connection():
     """Test the proxy connection."""
