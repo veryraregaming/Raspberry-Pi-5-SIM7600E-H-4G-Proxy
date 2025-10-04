@@ -24,12 +24,13 @@ for pattern in 'wwan' 'ppp' 'usb' 'eth1' 'eth2' 'eth3' 'enx' 'cdc'; do
       CELL_IFACE=""
       continue
     fi
-    # Verify this interface has an IP address (indicating it's active)
-    if ip addr show "${CELL_IFACE}" | grep -q "inet "; then
-      echo "[4gproxy-net] Found active cellular interface: ${CELL_IFACE} (pattern: ${pattern})"
+    # For direct modem mode, we might not have an IP on the interface
+    # Check if interface exists and is up
+    if ip link show "${CELL_IFACE}" | grep -q "state UP\|state UNKNOWN"; then
+      echo "[4gproxy-net] Found cellular interface: ${CELL_IFACE} (pattern: ${pattern})"
       break
     else
-      echo "[4gproxy-net] Found interface ${CELL_IFACE} but no IP assigned, trying next..."
+      echo "[4gproxy-net] Found interface ${CELL_IFACE} but not up, trying next..."
       CELL_IFACE=""
     fi
   fi

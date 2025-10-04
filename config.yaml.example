@@ -7,6 +7,10 @@ proxy:
   auth_enabled: false         # Set to true to enable proxy authentication
   user: "your-proxy-username"  # only used if auth_enabled: true
   password: "your-proxy-password"  # only used if auth_enabled: true
+modem:
+  apn: "internet"             # APN for your carrier (common: internet, web, data, broadband)
+  port: "/dev/ttyUSB2"        # Modem port (auto-detected)
+  timeout: 2                  # AT command timeout in seconds
 pm2:
   enabled: true               # Enable PM2 process management
   auto_restart: true          # Auto-restart on crash

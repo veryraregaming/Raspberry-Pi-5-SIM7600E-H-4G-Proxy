@@ -107,12 +107,13 @@ for pattern in 'wwan' 'ppp' 'usb' 'eth1' 'eth2' 'eth3' 'enx' 'cdc'; do
       CELL_IFACE=""
       continue
     fi
-    # Verify this interface has an IP address (indicating it's active)
-    if ip addr show "${CELL_IFACE}" | grep -q "inet "; then
-      echo "[4gproxy-net] Found active cellular interface: ${CELL_IFACE} (pattern: ${pattern})"
+    # For direct modem mode, we might not have an IP on the interface
+    # Check if interface exists and is up
+    if ip link show "${CELL_IFACE}" | grep -q "state UP\|state UNKNOWN"; then
+      echo "[4gproxy-net] Found cellular interface: ${CELL_IFACE} (pattern: ${pattern})"
       break
     else
-      echo "[4gproxy-net] Found interface ${CELL_IFACE} but no IP assigned, trying next..."
+      echo "[4gproxy-net] Found interface ${CELL_IFACE} but not up, trying next..."
       CELL_IFACE=""
     fi
   fi
@@ -166,9 +167,45 @@ fi
 echo "==> Running main.py to setup config and network…"
 # main.py will:
 #  - auto-detect LAN IP, write config.yaml & squid.conf (no auth by default)
+#  - activate SIM7600E-H modem with direct AT commands
 #  - call ./4gproxy-net.sh (policy routing)
 #  - write ecosystem.config.js
 python3 "${SCRIPT_DIR}/main.py" || true
+
+# ---- Ensure modem is activated and interface is up -------------------------
+echo "==> Ensuring cellular interface is ready…"
+# Wait a moment for modem activation
+sleep 3
+
+# Check if wwan0 is up, if not bring it up
+if ! ip link show wwan0 | grep -q "state UP\|state UNKNOWN"; then
+  echo "==> Bringing up wwan0 interface…"
+  ip link set wwan0 up || true
+  sleep 2
+fi
+
+# Check if we have a cellular interface
+CELL_IFACE=""
+for pattern in 'wwan' 'ppp' 'usb' 'eth1' 'eth2' 'eth3' 'enx' 'cdc'; do
+  CELL_IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -E "^${pattern}" | head -n1 || true)
+  if [[ -n "${CELL_IFACE:-}" ]]; then
+    if [[ "${CELL_IFACE}" == "eth0" || "${CELL_IFACE}" == "wlan0" ]]; then
+      CELL_IFACE=""
+      continue
+    fi
+    if ip link show "${CELL_IFACE}" | grep -q "state UP\|state UNKNOWN"; then
+      echo "==> Found cellular interface: ${CELL_IFACE}"
+      break
+    fi
+    CELL_IFACE=""
+  fi
+done
+
+if [[ -z "${CELL_IFACE:-}" ]]; then
+  echo "⚠️  No cellular interface found - proxy will use home network"
+else
+  echo "✅ Cellular interface ready: ${CELL_IFACE}"
+fi
 
 # ---- ENSURE PM2 is NOT running as root ------------------------------------
 echo "==> Ensuring root-PM2 is stopped and cleaned…"
@@ -188,6 +225,24 @@ if [[ -z "${START_CMD}" ]]; then
   START_CMD="sudo env PATH=$PATH pm2 startup systemd -u ${REAL_USER} --hp ${REAL_HOME} -y"
 fi
 eval "${START_CMD}" || true
+
+# ---- Wait for services to start and verify ----------------------------------
+echo "==> Waiting for services to start…"
+sleep 5
+
+# Check if Squid is running
+if sudo ss -ltnp | grep -q ":3128"; then
+  echo "✅ Squid proxy is running on port 3128"
+else
+  echo "⚠️  Squid proxy not detected on port 3128"
+fi
+
+# Check if API is running
+if sudo ss -ltnp | grep -q ":8088"; then
+  echo "✅ API server is running on port 8088"
+else
+  echo "⚠️  API server not detected on port 8088"
+fi
 
 # ---- Gentle wait for the API to boot ---------------------------------------
 echo "==> Waiting for API (127.0.0.1:8088)…"
@@ -209,19 +264,36 @@ fi
 DIRECT_IP="$(curl -s --max-time 5 https://api.ipify.org || echo 'Unknown')"
 PROXY_IP="Unknown"
 if [[ -n "${LAN_IP}" ]]; then
-  PROXY_IP="$(curl -s --max-time 8 -x "http://${LAN_IP}:8080" https://api.ipify.org || echo 'Unknown')"
+  PROXY_IP="$(curl -s --max-time 8 -x "http://${LAN_IP}:3128" https://api.ipify.org || echo 'Unknown')"
+fi
+
+# Determine if proxy is using cellular or home network
+if [[ "${PROXY_IP}" != "Unknown" && "${PROXY_IP}" != "${DIRECT_IP}" ]]; then
+  NETWORK_TYPE="Cellular (SIM card)"
+else
+  NETWORK_TYPE="Home network (fallback)"
 fi
 
 echo
 echo "============================================================"
 echo "🎉 SETUP COMPLETE!"
 echo "============================================================"
-echo "📡 HTTP Proxy: ${LAN_IP:-<detected-LAN>}:3128"
-echo "📡 HTTPS Proxy: ${LAN_IP:-<detected-LAN>}:3128"
+echo "📡 HTTP/HTTPS Proxy: ${LAN_IP:-<detected-LAN>}:3128"
 echo "🌐 Direct (no proxy) Public IP: ${DIRECT_IP}"
 echo "🌐 Proxy Public IP: ${PROXY_IP}"
-echo "🔧 PM2 (user ${REAL_USER}):  pm2 status | pm2 logs"
-echo "⚙️  Edit ${SCRIPT_DIR}/config.yaml for auth, then: pm2 restart 4g-proxy-squid"
-echo "🧪 Test direct:  curl -s https://api.ipify.org && echo"
-echo "🧪 Test proxy :  curl -x http://${LAN_IP}:3128 -s https://api.ipify.org && echo"
+echo "📶 Network Type: ${NETWORK_TYPE}"
+echo ""
+echo "🔧 Management Commands:"
+echo "  pm2 status                    # View service status"
+echo "  pm2 logs                      # View all logs"
+echo "  pm2 restart 4g-proxy-squid    # Restart proxy"
+echo "  pm2 restart all               # Restart all services"
+echo ""
+echo "⚙️  Configuration:"
+echo "  Edit ${SCRIPT_DIR}/config.yaml for APN/auth settings"
+echo "  Then: pm2 restart 4g-proxy-squid"
+echo ""
+echo "🧪 Test Commands:"
+echo "  curl -s https://api.ipify.org && echo                    # Direct IP"
+echo "  curl -x http://${LAN_IP}:3128 -s https://api.ipify.org && echo  # Proxy IP"
 echo "============================================================"
