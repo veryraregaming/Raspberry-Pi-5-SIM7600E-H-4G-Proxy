@@ -71,9 +71,15 @@ def detect_modem_port():
     return '/dev/ttyUSB2'  # Default fallback
 
 def create_ppp_config(apn, port):
-    """Create PPP configuration files"""
-    # Create chat script
-    chat_script = f'''ABORT 'BUSY'
+    """Create PPP configuration files (idempotent)"""
+    chat_file = "/etc/chatscripts/ee-chat"
+    peer_file = "/etc/ppp/peers/ee"
+    log_file = "/var/log/ppp-ee.log"
+    
+    # Create chat script if missing
+    if not os.path.exists(chat_file):
+        print(f"  📝 Creating {chat_file}...")
+        chat_script = f'''ABORT 'BUSY'
 ABORT 'NO CARRIER'
 ABORT 'ERROR'
 ABORT 'NO DIALTONE'
@@ -88,15 +94,21 @@ OK 'AT+CGATT=1'
 OK 'AT+CGDCONT=1,"IP","{apn}"'
 OK 'ATD*99#'
 CONNECT '''''
+        
+        run_cmd("sudo mkdir -p /etc/chatscripts", check=False)
+        with open("/tmp/ee-chat", "w") as f:
+            f.write(chat_script)
+        run_cmd("sudo cp /tmp/ee-chat /etc/chatscripts/ee-chat", check=False)
+        run_cmd("sudo chmod 644 /etc/chatscripts/ee-chat", check=False)
+    else:
+        print(f"  ✅ {chat_file} already exists")
+        # Update APN in existing file
+        run_cmd(f'sudo sed -i "s/AT+CGDCONT=1,\\\"IP\\\",\\\".*\\\"/AT+CGDCONT=1,\\\"IP\\\",\\\"{apn}\\\"/" {chat_file}', check=False)
     
-    run_cmd("sudo mkdir -p /etc/chatscripts", check=False)
-    with open("/tmp/ee-chat", "w") as f:
-        f.write(chat_script)
-    run_cmd("sudo cp /tmp/ee-chat /etc/chatscripts/ee-chat", check=False)
-    run_cmd("sudo chmod 644 /etc/chatscripts/ee-chat", check=False)
-    
-    # Create peer file
-    peer_config = f'''{port}
+    # Create peer file if missing
+    if not os.path.exists(peer_file):
+        print(f"  📝 Creating {peer_file}...")
+        peer_config = f'''{port}
 115200
 crtscts
 lock
@@ -110,13 +122,17 @@ ipcp-accept-remote
 lcp-echo-interval 10
 lcp-echo-failure 6
 debug
-logfile /var/log/ppp-sim7600.log
-connect "/usr/sbin/chat -v -f /etc/chatscripts/ee-chat"'''
-    
-    with open("/tmp/sim7600", "w") as f:
-        f.write(peer_config)
-    run_cmd("sudo cp /tmp/sim7600 /etc/ppp/peers/sim7600", check=False)
-    run_cmd("sudo chmod 644 /etc/ppp/peers/sim7600", check=False)
+logfile {log_file}
+connect "/usr/sbin/chat -v -f {chat_file}"'''
+        
+        with open("/tmp/ee-peer", "w") as f:
+            f.write(peer_config)
+        run_cmd("sudo cp /tmp/ee-peer /etc/ppp/peers/ee", check=False)
+        run_cmd("sudo chmod 644 /etc/ppp/peers/ee", check=False)
+    else:
+        print(f"  ✅ {peer_file} already exists")
+        # Update port in existing file
+        run_cmd(f'sudo sed -i "1s|^/dev/ttyUSB.*$|{port}|" {peer_file}', check=False)
 
 def send_at_command(cmd, port=None, timeout=2):
     """Send AT command to modem and return response"""
@@ -194,7 +210,7 @@ def activate_modem():
     
     # Start PPP connection
     print("  🚀 Starting PPP connection...")
-    run_cmd("sudo pppd call sim7600", check=False)
+    run_cmd("sudo pppd call ee", check=False)
     
     # Wait for ppp0 to come up
     print("  ⏳ Waiting for ppp0...")
@@ -203,122 +219,42 @@ def activate_modem():
         result = run_cmd("ip -4 addr show dev ppp0", check=False)
         if "inet " in result[0]:
             print("  ✅ ppp0 is up with IPv4")
+            # Keep WiFi as primary route
+            keep_wifi_primary()
             return True
     
     print("  ⚠️ ppp0 did not come up, trying fallback...")
     return False
-    
-    if "successfully connected" in result[0].lower():
-        print("  ✅ ModemManager connected successfully")
-        # Wait a moment for interface to come up
-        time.sleep(3)
-        
-        # Check bearer details to get the IP configuration
-        bearer_result = run_cmd("sudo mmcli -b 1", check=False)
-        bearer_text = "\n".join(bearer_result)
-        
-        if "IPv4 configuration" in bearer_text:
-            # Extract IP from bearer info
-            ip_addr = None
-            gateway = None
-            prefix = None
+
+def keep_wifi_primary():
+    """Keep WiFi as primary route, PPP as secondary"""
+    try:
+        # Get current default route
+        result = run_cmd("ip route show default", check=False)
+        if result and result[0]:
+            default_line = result[0]
+            # Extract gateway and device
+            parts = default_line.split()
+            gw = None
+            dev = None
+            metric = 100
             
-            for line in bearer_result:
-                if "address:" in line and "IPv4" in bearer_text.split("address:")[0].split("\n")[-2]:
-                    ip_addr = line.split("address:")[1].strip()
-                    print(f"  📡 Bearer IP: {ip_addr}")
-                elif "gateway:" in line and "IPv4" in bearer_text.split("gateway:")[0].split("\n")[-2]:
-                    gateway = line.split("gateway:")[1].strip()
-                    print(f"  📡 Bearer Gateway: {gateway}")
-                elif "prefix:" in line and "IPv4" in bearer_text.split("prefix:")[0].split("\n")[-2]:
-                    prefix = line.split("prefix:")[1].strip()
-                    print(f"  📡 Bearer Prefix: {prefix}")
+            for i, part in enumerate(parts):
+                if part == "via" and i+1 < len(parts):
+                    gw = parts[i+1]
+                elif part == "dev" and i+1 < len(parts):
+                    dev = parts[i+1]
+                elif part == "metric" and i+1 < len(parts):
+                    metric = int(parts[i+1])
             
-            if ip_addr and gateway:
-                # Configure wwan0 with the bearer IP
-                if prefix:
-                    ip_with_prefix = f"{ip_addr}/{prefix}"
-                else:
-                    ip_with_prefix = f"{ip_addr}/30"  # Default /30 for cellular
-                
-                print(f"  📡 Configuring wwan0 with {ip_with_prefix}")
-                run_cmd(f"sudo ip addr add {ip_with_prefix} dev wwan0", check=False)
-                
-                # Add routes to proxy table (not main table to avoid hijacking)
-                print(f"  📡 Adding routes to proxy table")
-                run_cmd(f"sudo ip route add default via {gateway} dev wwan0 table 100", check=False)
-                
-                # Add local network route
-                if "/" in ip_with_prefix:
-                    ip_base = ip_with_prefix.split("/")[0]
-                    network = ".".join(ip_base.split(".")[:-1]) + ".0"
-                    run_cmd(f"sudo ip route add {network}/24 dev wwan0 table 100", check=False)
-        
-        # Check if wwan0 got an IPv4 address
-        ipv4_check = run_cmd("ip -4 addr show wwan0", check=False)
-        if "inet " in ipv4_check[0]:
-            print("  ✅ wwan0 has IPv4 address")
-            return True
-        else:
-            print("  ⚠️ wwan0 still no IPv4, trying dhclient...")
-            # Try to get IPv4 address with dhclient
-            dhclient_result = run_cmd("sudo dhclient -4 wwan0", check=False)
-            time.sleep(3)
-            
-            # Check again
-            ipv4_check = run_cmd("ip -4 addr show wwan0", check=False)
-            if "inet " in ipv4_check[0]:
-                print("  ✅ wwan0 now has IPv4 address")
-                return True
-            else:
-                print("  ⚠️ Still no IPv4, but interface is up")
-                return True  # Continue anyway, might work with IPv6
-    
-    print("  ⚠️ ModemManager failed, trying direct AT commands...")
-    
-    # Fallback to direct AT commands
-    port = detect_modem_port()
-    
-    # Check if modem responds
-    response = send_at_command("AT", port)
-    if "OK" not in response:
-        print(f"  ❌ Modem not responding on {port}")
-        return False
-    
-    print(f"  ✅ Modem responding on {port}")
-    
-    # Configure modem for direct mode
-    commands = [
-        "AT+CFUN=1",           # Enable full functionality
-        "AT+CPIN?",            # Check SIM status
-        "AT+CREG?",            # Check network registration
-        "AT+CGATT?",           # Check GPRS attachment
-        f"AT+CGDCONT=1,\"IP\",\"{apn}\",\"0.0.0.0\",0,0",  # Configure PDP context with configured APN
-        "AT+CGACT=1,1",        # Activate PDP context
-        "AT+CGPADDR"           # Get IP address
-    ]
-    
-    for cmd in commands:
-        print(f"  📤 {cmd}")
-        response = send_at_command(cmd, port)
-        print(f"  📥 {response}")
-        time.sleep(1)
-    
-    # Check if we got an IP
-    ip_response = send_at_command("AT+CGPADDR", port)
-    print(f"  📥 {ip_response}")
-    
-    # Check if we got a valid IP address (not 0.0.0.0)
-    if "+CGPADDR: 1," in ip_response:
-        # Extract the IP from the response
-        ip_line = [line for line in ip_response.split('\n') if '+CGPADDR: 1,' in line]
-        if ip_line and "0.0.0.0" not in ip_line[0]:
-            print("  ✅ Modem activated with IP address")
-            return True
-    
-    print("  ⚠️ Configured APN failed, trying all APNs automatically...")
-    # Always try all APNs to find the right one
-    return try_common_apns(port)
+            if gw and dev and dev not in ["ppp0"]:
+                print(f"  🔄 Keeping {dev} as primary route (metric {metric})")
+                # Ensure WiFi stays primary
+                run_cmd(f"sudo ip route replace default via {gw} dev {dev} metric {metric}", check=False)
+                # Add PPP as secondary with higher metric
+                run_cmd(f"sudo ip route replace default dev ppp0 metric {metric+300}", check=False)
+    except:
+        pass
 
 def try_common_apns(port):
     """Try common APN configurations if default fails"""
