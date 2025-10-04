@@ -98,6 +98,11 @@ def activate_modem():
     
     print(f"  📡 Using APN: {apn}")
     
+    # Reset modem first to clear any stuck state
+    print("  🔄 Resetting modem...")
+    run_cmd("sudo mmcli -m 0 --reset", check=False)
+    time.sleep(5)
+    
     # Try ModemManager first (more reliable)
     print("  🔄 Trying ModemManager connection...")
     result = run_cmd(f"sudo mmcli -m 0 --simple-connect=\"apn={apn}\"", check=False)
@@ -107,16 +112,57 @@ def activate_modem():
         # Wait a moment for interface to come up
         time.sleep(3)
         
+        # Check bearer details to get the IP configuration
+        bearer_result = run_cmd("sudo mmcli -b 1", check=False)
+        bearer_text = "\n".join(bearer_result)
+        
+        if "IPv4 configuration" in bearer_text:
+            # Extract IP from bearer info
+            ip_addr = None
+            gateway = None
+            prefix = None
+            
+            for line in bearer_result:
+                if "address:" in line and "IPv4" in bearer_text.split("address:")[0].split("\n")[-2]:
+                    ip_addr = line.split("address:")[1].strip()
+                    print(f"  📡 Bearer IP: {ip_addr}")
+                elif "gateway:" in line and "IPv4" in bearer_text.split("gateway:")[0].split("\n")[-2]:
+                    gateway = line.split("gateway:")[1].strip()
+                    print(f"  📡 Bearer Gateway: {gateway}")
+                elif "prefix:" in line and "IPv4" in bearer_text.split("prefix:")[0].split("\n")[-2]:
+                    prefix = line.split("prefix:")[1].strip()
+                    print(f"  📡 Bearer Prefix: {prefix}")
+            
+            if ip_addr and gateway:
+                # Configure wwan0 with the bearer IP
+                if prefix:
+                    ip_with_prefix = f"{ip_addr}/{prefix}"
+                else:
+                    ip_with_prefix = f"{ip_addr}/30"  # Default /30 for cellular
+                
+                print(f"  📡 Configuring wwan0 with {ip_with_prefix}")
+                run_cmd(f"sudo ip addr add {ip_with_prefix} dev wwan0", check=False)
+                
+                # Add routes to proxy table (not main table to avoid hijacking)
+                print(f"  📡 Adding routes to proxy table")
+                run_cmd(f"sudo ip route add default via {gateway} dev wwan0 table 100", check=False)
+                
+                # Add local network route
+                if "/" in ip_with_prefix:
+                    ip_base = ip_with_prefix.split("/")[0]
+                    network = ".".join(ip_base.split(".")[:-1]) + ".0"
+                    run_cmd(f"sudo ip route add {network}/24 dev wwan0 table 100", check=False)
+        
         # Check if wwan0 got an IPv4 address
         ipv4_check = run_cmd("ip -4 addr show wwan0", check=False)
         if "inet " in ipv4_check[0]:
             print("  ✅ wwan0 has IPv4 address")
             return True
         else:
-            print("  ⚠️ wwan0 only has IPv6, trying to get IPv4...")
-            # Try to get IPv4 address
-            run_cmd("sudo dhclient -4 wwan0", check=False)
-            time.sleep(2)
+            print("  ⚠️ wwan0 still no IPv4, trying dhclient...")
+            # Try to get IPv4 address with dhclient
+            dhclient_result = run_cmd("sudo dhclient -4 wwan0", check=False)
+            time.sleep(3)
             
             # Check again
             ipv4_check = run_cmd("ip -4 addr show wwan0", check=False)
