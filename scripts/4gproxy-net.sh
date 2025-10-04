@@ -10,12 +10,39 @@ set -euo pipefail
 echo "[4gproxy-net] starting…"
 
 # 1) detect cellular interface
-CELL_IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -E 'wwan|ppp|usb' | head -n1 || true)
+echo "[4gproxy-net] Available interfaces:"
+ip -o link show | awk -F': ' '{print $2}' | grep -v lo
+
+# Try multiple patterns for cellular interfaces (EXCLUDING eth0/wlan0)
+CELL_IFACE=""
+for pattern in 'wwan' 'ppp' 'usb' 'eth1' 'eth2' 'eth3' 'enx' 'cdc'; do
+  CELL_IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -E "^${pattern}" | head -n1 || true)
+  if [[ -n "${CELL_IFACE:-}" ]]; then
+    # CRITICAL: Never use eth0 or wlan0 (home network interfaces)
+    if [[ "${CELL_IFACE}" == "eth0" || "${CELL_IFACE}" == "wlan0" ]]; then
+      echo "[4gproxy-net] Skipping ${CELL_IFACE} (home network interface)"
+      CELL_IFACE=""
+      continue
+    fi
+    # Verify this interface has an IP address (indicating it's active)
+    if ip addr show "${CELL_IFACE}" | grep -q "inet "; then
+      echo "[4gproxy-net] Found active cellular interface: ${CELL_IFACE} (pattern: ${pattern})"
+      break
+    else
+      echo "[4gproxy-net] Found interface ${CELL_IFACE} but no IP assigned, trying next..."
+      CELL_IFACE=""
+    fi
+  fi
+done
+
 if [[ -z "${CELL_IFACE:-}" ]]; then
-  echo "[4gproxy-net] ERROR: no cellular interface (wwan/ppp/usb) found."
+  echo "[4gproxy-net] ERROR: no active cellular interface found."
+  echo "[4gproxy-net] Tried patterns: wwan, ppp, usb, eth1, eth2, eth3, enx, cdc"
+  echo "[4gproxy-net] Available interfaces with IPs:"
+  ip -o addr show | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d: -f1
   exit 1
 fi
-echo "[4gproxy-net] cellular iface: ${CELL_IFACE}"
+echo "[4gproxy-net] Using cellular interface: ${CELL_IFACE}"
 
 # 2) ensure proxy user exists
 PROXY_USER="proxyuser"

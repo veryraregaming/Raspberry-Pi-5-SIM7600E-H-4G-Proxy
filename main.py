@@ -59,15 +59,7 @@ def install_pm2():
     run_cmd("npm install -g pm2", check=False)
     print("  ✅ PM2 ready")
 
-def install_3proxy():
-    print("  Installing 3proxy from source…")
-    run_cmd("apt install -y build-essential wget unzip", check=False)
-    run_cmd("cd /tmp && wget -q https://github.com/z3APA3A/3proxy/archive/refs/heads/master.zip", check=False)
-    run_cmd("cd /tmp && unzip -o master.zip", check=False)
-    run_cmd("cd /tmp/3proxy-master && make -f Makefile.Linux", check=False)
-    run_cmd("cp /tmp/3proxy-master/bin/3proxy /usr/local/bin/", check=False)
-    run_cmd("chmod +x /usr/local/bin/3proxy", check=False)
-    print("  ✅ 3proxy installed")
+# Squid installation is handled by run.sh
 
 def install_dependencies():
     print("🔧 Installing dependencies…")
@@ -79,7 +71,7 @@ def install_dependencies():
         print(f"  apt install -y {p}")
         run_cmd(f"apt install -y {p}", check=False)
     install_pm2()
-    install_3proxy()
+    # Squid is installed by run.sh
 
 # ----------------- config -----------------
 
@@ -100,50 +92,71 @@ def create_config():
     print("  ✅ Proxy auth: disabled (edit config.yaml later if you want auth)")
     return cfg
 
-def create_3proxy_config(cfg):
-    print("🔧 Writing 3proxy.cfg")
+def create_squid_config(cfg):
+    print("🔧 Writing squid.conf")
     lan_ip = cfg["lan_bind_ip"]
     auth_enabled = cfg["proxy"]["auth_enabled"]
     user = cfg["proxy"]["user"]
     pw = cfg["proxy"]["password"]
 
     if auth_enabled and user and pw:
-        proxy_cfg = f"""# 3proxy with auth
-nserver 8.8.8.8
-nserver 8.8.4.4
-nscache 65536
-timeouts 1 5 30 60 180 1800 15 60
+        proxy_cfg = f"""# Squid proxy with auth
+http_port {lan_ip}:3128
 
-auth strong
-users {user}:CL:{pw}
+# Authentication
+auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwd
+auth_param basic children 5
+auth_param basic realm Squid proxy-caching web server
+auth_param basic credentialsttl 2 hours
+auth_param basic casesensitive off
 
-# bind incoming to LAN IP
-proxy -a -p8080 -i{lan_ip}
-socks  -a -p1080 -i{lan_ip}
+# Access control
+acl authenticated proxy_auth REQUIRED
+http_access allow authenticated
+http_access deny all
 
-allow {user}
-log
-rotate 30
+# Forward settings
+forwarded_for off
+request_header_access X-Forwarded-For deny all
+request_header_access Via deny all
+
+# Cache settings
+cache_dir ufs /var/spool/squid 100 16 256
+cache_mem 64 MB
+
+# Logging
+access_log /var/log/squid/access.log
+cache_log /var/log/squid/cache.log
+
+# DNS
+dns_nameservers 8.8.8.8 8.8.4.4
 """
     else:
-        proxy_cfg = f"""# 3proxy without auth
-nserver 8.8.8.8
-nserver 8.8.4.4
-nscache 65536
-timeouts 1 5 30 60 180 1800 15 60
+        proxy_cfg = f"""# Squid proxy without auth
+http_port {lan_ip}:3128
 
-auth none
+# Allow all connections (no auth by default)
+http_access allow all
 
-# bind incoming to LAN IP
-proxy -a -p8080 -i{lan_ip}
-socks  -a -p1080 -i{lan_ip}
+# Forward settings
+forwarded_for off
+request_header_access X-Forwarded-For deny all
+request_header_access Via deny all
 
-log
-rotate 30
+# Cache settings
+cache_dir ufs /var/spool/squid 100 16 256
+cache_mem 64 MB
+
+# Logging
+access_log /var/log/squid/access.log
+cache_log /var/log/squid/cache.log
+
+# DNS
+dns_nameservers 8.8.8.8 8.8.4.4
 """
-    with open("3proxy.cfg","w") as f:
+    with open("squid.conf","w") as f:
         f.write(proxy_cfg)
-    print("  ✅ 3proxy.cfg ready (HTTP:8080, SOCKS:1080 on LAN IP)")
+    print("  ✅ squid.conf ready (HTTP:3128 on LAN IP)")
 
 # ----------------- networking -----------------
 
@@ -176,8 +189,8 @@ def create_pm2_ecosystem():
             "env": {"PYTHONPATH": script_dir}
         },
         {
-            "name": "4g-proxy-3proxy",
-            "script": "./run_3proxy.sh",
+            "name": "4g-proxy-squid",
+            "script": "./run_squid.sh",
             "interpreter": "bash",
             "cwd": script_dir,
             "autorestart": True,
@@ -284,7 +297,7 @@ if __name__ == "__main__":
     try:
         install_dependencies()
         cfg = create_config()
-        create_3proxy_config(cfg)
+        create_squid_config(cfg)
         if not setup_network():
             print("⚠️ Network setup failed; continuing so you can check logs")
         start_services()
