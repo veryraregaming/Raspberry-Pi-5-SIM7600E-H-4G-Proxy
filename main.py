@@ -87,7 +87,7 @@ def install_3proxy():
     
     # Download and compile 3proxy
     run_command("cd /tmp && wget https://github.com/z3APA3A/3proxy/archive/refs/heads/master.zip", check=False)
-    run_command("cd /tmp && unzip master.zip", check=False)
+    run_command("cd /tmp && unzip -o master.zip", check=False)
     run_command("cd /tmp/3proxy-master && make -f Makefile.Linux", check=False)
     run_command("cp /tmp/3proxy-master/bin/3proxy /usr/local/bin/", check=False)
     run_command("chmod +x /usr/local/bin/3proxy", check=False)

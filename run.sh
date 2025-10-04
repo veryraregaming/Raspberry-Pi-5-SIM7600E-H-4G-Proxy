@@ -32,7 +32,7 @@ echo "🔧 Installing 3proxy from source..."
 apt install -y build-essential wget unzip
 cd /tmp
 wget https://github.com/z3APA3A/3proxy/archive/refs/heads/master.zip
-unzip master.zip
+unzip -o master.zip
 cd 3proxy-master
 make -f Makefile.Linux
 cp bin/3proxy /usr/local/bin/
