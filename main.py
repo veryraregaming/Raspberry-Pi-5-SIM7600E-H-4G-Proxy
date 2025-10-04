@@ -322,11 +322,22 @@ def test_connection(config):
     lan_ip = config['lan_bind_ip']
     token = config['api']['token']
     
+    # Get current public IP for display
+    try:
+        response = requests.get('https://ipv4.icanhazip.com', timeout=10)
+        current_ip = response.text.strip() if response.status_code == 200 else "Unknown"
+    except:
+        current_ip = "Unknown"
+    
+    interval_minutes = config['pm2']['ip_rotation_interval'] // 60
+    
     print("\n" + "=" * 60)
     print("🎉 SETUP COMPLETE! Your 4G proxy is ready!")
     print("=" * 60)
     print(f"📡 HTTP Proxy: {lan_ip}:8080")
     print(f"📡 SOCKS Proxy: {lan_ip}:1080")
+    print(f"🌐 Current Public IP: {current_ip}")
+    print(f"🔄 IP Rotation: Every {interval_minutes} minutes")
     print(f"🔑 API Token: {token[:20]}...")
     print("\n🧪 Test Commands:")
     print(f"curl -x http://{lan_ip}:8080 https://api.ipify.org")

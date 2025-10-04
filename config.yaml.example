@@ -6,3 +6,9 @@ api:
 proxy:
   user: "your-proxy-username"  # leave empty for no auth
   password: "your-proxy-password"  # leave empty for no auth
+pm2:
+  enabled: true               # Enable PM2 process management
+  auto_restart: true          # Auto-restart on crash
+  ip_rotation_interval: 300   # IP rotation interval in seconds (300 = 5 minutes)
+  max_restarts: 10            # Maximum restart attempts
+  restart_delay: 5000         # Delay between restarts (ms)

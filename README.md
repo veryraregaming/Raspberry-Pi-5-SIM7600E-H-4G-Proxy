@@ -171,6 +171,14 @@ pm2 restart all
 - API token
 - LAN IP address
 
+### Example Configuration
+```yaml
+pm2:
+  ip_rotation_interval: 600   # 10 minutes
+  # ip_rotation_interval: 1800  # 30 minutes
+  # ip_rotation_interval: 3600  # 1 hour
+```
+
 ## 🛡️ Security Notes
 
 - **Never commit `config.yaml`** - it contains sensitive tokens

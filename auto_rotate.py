@@ -9,6 +9,7 @@ import requests
 import yaml
 import sys
 import os
+from datetime import datetime
 
 def load_config():
     """Load configuration from config.yaml"""
@@ -18,6 +19,16 @@ def load_config():
     except FileNotFoundError:
         print("❌ config.yaml not found")
         sys.exit(1)
+
+def get_current_ip():
+    """Get current public IP"""
+    try:
+        response = requests.get('https://ipv4.icanhazip.com', timeout=10)
+        if response.status_code == 200:
+            return response.text.strip()
+    except:
+        pass
+    return "Unknown"
 
 def rotate_ip(config):
     """Rotate the IP address using the API"""
@@ -30,15 +41,16 @@ def rotate_ip(config):
         
         if response.status_code == 200:
             data = response.json()
-            print(f"✅ IP rotated successfully: {data.get('public_ip', 'Unknown')}")
-            return True
+            new_ip = data.get('public_ip', 'Unknown')
+            print(f"✅ IP rotated successfully: {new_ip}")
+            return True, new_ip
         else:
             print(f"❌ IP rotation failed: {response.status_code}")
-            return False
+            return False, None
             
     except requests.RequestException as e:
         print(f"❌ Connection error: {e}")
-        return False
+        return False, None
 
 def main():
     """Main rotation loop"""
@@ -51,18 +63,36 @@ def main():
         sys.exit(1)
     
     interval = config['pm2']['ip_rotation_interval']
-    print(f"⏰ Rotation interval: {interval} seconds")
+    interval_minutes = interval // 60
+    
+    print(f"⏰ Rotation interval: {interval} seconds ({interval_minutes} minutes)")
+    
+    # Get initial IP
+    current_ip = get_current_ip()
+    print(f"🌐 Current IP: {current_ip}")
+    
+    rotation_count = 0
     
     while True:
         try:
-            print(f"\n🔄 Rotating IP at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            rotation_count += 1
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
-            if rotate_ip(config):
-                print("✅ IP rotation successful")
+            print(f"\n🔄 Rotation #{rotation_count} at {timestamp}")
+            print(f"🌐 Current IP: {current_ip}")
+            
+            success, new_ip = rotate_ip(config)
+            
+            if success and new_ip:
+                if new_ip != current_ip:
+                    print(f"🎉 IP changed: {current_ip} → {new_ip}")
+                    current_ip = new_ip
+                else:
+                    print(f"ℹ️  IP unchanged: {current_ip}")
             else:
                 print("❌ IP rotation failed - will retry next cycle")
             
-            print(f"⏰ Waiting {interval} seconds until next rotation...")
+            print(f"⏰ Next rotation in {interval_minutes} minutes...")
             time.sleep(interval)
             
         except KeyboardInterrupt:
