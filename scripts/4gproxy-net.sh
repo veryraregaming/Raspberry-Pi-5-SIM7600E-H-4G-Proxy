@@ -16,11 +16,13 @@ ip -o link show | awk -F': ' '{print $2}' | grep -v lo
 # Try multiple patterns for cellular interfaces (EXCLUDING eth0/wlan0)
 CELL_IFACE=""
 
-# Check for ppp0 first (PPP connection)
+# Check for ppp0 first (PPP connection) - HIGHEST PRIORITY
+echo "[4gproxy-net] Checking for ppp0 (PPP connection)..."
 if ip -4 addr show ppp0 2>/dev/null | grep -q "inet "; then
   CELL_IFACE="ppp0"
-  echo "[4gproxy-net] Found active cellular interface: ppp0 (PPP)"
+  echo "[4gproxy-net] ✅ Found active cellular interface: ppp0 (PPP) - USING THIS"
 else
+  echo "[4gproxy-net] ❌ ppp0 not found or no IPv4, checking other patterns..."
   # Fallback to other patterns
   for pattern in 'wwan' 'ppp' 'usb' 'eth1' 'eth2' 'eth3' 'enx' 'cdc'; do
     CELL_IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -E "^${pattern}" | head -n1 || true)
@@ -32,16 +34,17 @@ else
         continue
       fi
       # For direct modem mode, we might not have an IP on the interface
-    # Check if interface exists and is up
-    if ip link show "${CELL_IFACE}" | grep -q "state UP\|state UNKNOWN"; then
-      echo "[4gproxy-net] Found cellular interface: ${CELL_IFACE} (pattern: ${pattern})"
-      break
-    else
-      echo "[4gproxy-net] Found interface ${CELL_IFACE} but not up, trying next..."
-      CELL_IFACE=""
+      # Check if interface exists and is up
+      if ip link show "${CELL_IFACE}" | grep -q "state UP\|state UNKNOWN"; then
+        echo "[4gproxy-net] Found cellular interface: ${CELL_IFACE} (pattern: ${pattern})"
+        break
+      else
+        echo "[4gproxy-net] Found interface ${CELL_IFACE} but not up, trying next..."
+        CELL_IFACE=""
+      fi
     fi
-  fi
-done
+  done
+fi
 
 if [[ -z "${CELL_IFACE:-}" ]]; then
   echo "[4gproxy-net] ERROR: no active cellular interface found."
