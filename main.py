@@ -243,19 +243,19 @@ def create_pm2_config():
                 'name': '4g-proxy-orchestrator',
                 'script': 'orchestrator.py',
                 'interpreter': 'python3',
-                'cwd': '/home/rare/Raspberry-Pi-5-SIM7600E-H-4G-Proxy',
+                'cwd': os.path.expanduser('~/Raspberry-Pi-5-SIM7600E-H-4G-Proxy'),
                 'autorestart': True,
                 'max_restarts': 10,
                 'restart_delay': 5000,
                 'env': {
-                    'PYTHONPATH': '/home/rare/Raspberry-Pi-5-SIM7600E-H-4G-Proxy'
+                    'PYTHONPATH': os.path.expanduser('~/Raspberry-Pi-5-SIM7600E-H-4G-Proxy')
                 }
             },
             {
                 'name': '4g-proxy-3proxy',
                 'script': '3proxy',
                 'args': '3proxy.cfg',
-                'cwd': '/home/rare/Raspberry-Pi-5-SIM7600E-H-4G-Proxy',
+                'cwd': os.path.expanduser('~/Raspberry-Pi-5-SIM7600E-H-4G-Proxy'),
                 'autorestart': True,
                 'max_restarts': 10,
                 'restart_delay': 5000
@@ -264,12 +264,12 @@ def create_pm2_config():
                 'name': '4g-proxy-auto-rotate',
                 'script': 'auto_rotate.py',
                 'interpreter': 'python3',
-                'cwd': '/home/rare/Raspberry-Pi-5-SIM7600E-H-4G-Proxy',
+                'cwd': os.path.expanduser('~/Raspberry-Pi-5-SIM7600E-H-4G-Proxy'),
                 'autorestart': True,
                 'max_restarts': 10,
                 'restart_delay': 5000,
                 'env': {
-                    'PYTHONPATH': '/home/rare/Raspberry-Pi-5-SIM7600E-H-4G-Proxy'
+                    'PYTHONPATH': os.path.expanduser('~/Raspberry-Pi-5-SIM7600E-H-4G-Proxy')
                 }
             }
         ]
