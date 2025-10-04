@@ -42,6 +42,9 @@ chmod +x /usr/local/bin/3proxy
 echo "🌐 Installing network tools..."
 apt install -y iptables
 
+# Return to project directory
+cd ~/Raspberry-Pi-5-SIM7600E-H-4G-Proxy
+
 # Make main.py executable
 chmod +x main.py
 
