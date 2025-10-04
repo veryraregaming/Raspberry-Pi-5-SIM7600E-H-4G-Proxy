@@ -32,6 +32,17 @@ cd Raspberry-Pi-5-SIM7600E-H-4G-Proxy
 sudo ./run.sh
 ```
 
+**Works from anywhere:**
+```bash
+# Clone to any directory
+git clone <repository-url> /home/user/my-proxy
+cd /home/user/my-proxy
+sudo ./run.sh
+
+# Or run from anywhere
+sudo /path/to/your/proxy/run.sh
+```
+
 **That's it!** The script will:
 - ✅ Auto-detect your LAN IP
 - ✅ Generate secure tokens

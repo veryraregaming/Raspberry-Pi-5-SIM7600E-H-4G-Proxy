@@ -38,16 +38,15 @@ make -f Makefile.Linux
 cp bin/3proxy /usr/local/bin/
 chmod +x /usr/local/bin/3proxy
 
-# Return to project directory
-cd "$HOME/Raspberry-Pi-5-SIM7600E-H-4G-Proxy"
+# Return to project directory (use script location)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
 # Install iptables
 echo "🌐 Installing network tools..."
 apt install -y iptables
 
-# Return to script's directory (works from anywhere)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+# Ensure we're in the script's directory
 echo "📁 Working directory: $(pwd)"
 
 # Make main.py executable
