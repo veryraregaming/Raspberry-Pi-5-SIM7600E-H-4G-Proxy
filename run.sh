@@ -138,8 +138,8 @@ rm -f "${REAL_HOME}/.pm2/dump.pm2"
 # ensure ecosystem.config.js exists before pm2 start
 [[ -f "${SCRIPT_DIR}/ecosystem.config.js" ]] || python3 "${SCRIPT_DIR}/main.py" --ecosystem-only
 
-# start only the orchestrator app from ecosystem
-sudo -u "${REAL_USER}" pm2 start "${SCRIPT_DIR}/ecosystem.config.js" --only 4g-proxy-orchestrator
+# start all apps from ecosystem (orchestrator + web interface)
+sudo -u "${REAL_USER}" pm2 start "${SCRIPT_DIR}/ecosystem.config.js"
 
 # save and enable at boot
 sudo -u "${REAL_USER}" pm2 save || true

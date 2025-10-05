@@ -290,6 +290,18 @@ def write_ecosystem():
       env: {{
         PYTHONPATH: "{BASE.as_posix()}"
       }}
+    }},
+    {{
+      name: "4g-proxy-web",
+      script: "web_interface.py",
+      interpreter: "python3",
+      cwd: "{BASE.as_posix()}",
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 5000,
+      env: {{
+        PYTHONPATH: "{BASE.as_posix()}"
+      }}
     }}
   ]
 }}
