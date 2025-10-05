@@ -10,10 +10,20 @@ pm2 delete 4g-proxy-auto-rotate 2>/dev/null || true
 pm2 kill 2>/dev/null || true
 echo "✅ Old PM2 processes cleaned up"
 
+# --- define user variables early ---
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
+if [[ -z "${REAL_HOME}" || ! -d "${REAL_HOME}" ]]; then
+  echo "Could not determine home directory for REAL_USER=$REAL_USER"
+  exit 1
+fi
+
+echo "==> Running as root for setup; PM2 will run as user: ${REAL_USER} (${REAL_HOME})"
+
 # --- create state directory with proper permissions ---
 echo "==> Setting up state directory..."
 mkdir -p state
-chown -R $USER:$USER state 2>/dev/null || true
+chown -R ${REAL_USER}:${REAL_USER} state 2>/dev/null || true
 chmod 755 state
 echo "✅ State directory created"
 
@@ -68,15 +78,6 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
-
-REAL_USER="${SUDO_USER:-$USER}"
-REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
-if [[ -z "${REAL_HOME}" || ! -d "${REAL_HOME}" ]]; then
-  echo "Could not determine home directory for REAL_USER=$REAL_USER"
-  exit 1
-fi
-
-echo "==> Running as root for setup; PM2 will run as user: ${REAL_USER} (${REAL_HOME})"
 
 # ---- apt & tools ------------------------------------------------------------
 echo "==> Installing base packages…"
