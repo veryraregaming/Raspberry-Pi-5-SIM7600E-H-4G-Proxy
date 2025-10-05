@@ -182,6 +182,13 @@ echo "============================================================"
 # Set RUN_ROTATE=1 in the environment to force a single rotation now.
 if [[ "${RUN_ROTATE:-0}" == "1" ]]; then
   echo "==> Triggering one-shot rotation (RUN_ROTATE=1)…"
+  
+  # Ensure jq is available for JSON formatting
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "==> Installing jq for JSON formatting..."
+    apt update -qq && apt install -y jq
+  fi
+  
   TOKEN="$(python3 -c 'import yaml,sys; print(yaml.safe_load(open("config.yaml"))["api"]["token"])')"
   curl -s -X POST -H "Authorization: Bearer ${TOKEN}" http://127.0.0.1:8088/rotate | jq . || true
 fi
