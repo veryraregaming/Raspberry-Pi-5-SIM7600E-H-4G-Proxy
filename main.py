@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Raspberry Pi 5 + SIM7600E-H 4G Proxy - Auto Setup (safe routing version)
-- Leaves system default route intact (eth0/wlan0 remain primary)
-- Adds ppp0 as a LOWER-PRIORITY default (higher metric)
+Raspberry Pi 5 + SIM7600E-H 4G Proxy - Auto Setup (RNDIS + PPP fallback)
+- Detects and uses RNDIS interface (enx*) for cellular connection
+- Falls back to PPP if RNDIS is not available
+- Prevents modem lockouts with proper error handling
 - Idempotently writes: config.yaml, squid.conf, ecosystem.config.js
-- Creates correct PPP chat/peer files for APN dialing
-- Brings PPP up and preserves LAN as primary route
+- Safe routing that preserves LAN connectivity
 """
 
 import os
@@ -71,9 +71,55 @@ def detect_lan_ip():
     finally:
         s.close()
 
-# ---------- modem / PPP ----------
+# ---------- modem detection (RNDIS + PPP) ----------
+
+def detect_rndis_interface():
+    """Detect RNDIS interface (enx*) that provides cellular connectivity."""
+    try:
+        out, _, _ = run_cmd([IP_PATH, "-br", "link", "show"], check=False)
+        for line in out.splitlines():
+            if line.startswith("enx") or line.startswith("eth1"):
+                parts = line.split()
+                iface = parts[0]
+                # Check if interface has an IP address
+                ip = detect_ipv4(iface)
+                if ip:
+                    print(f"  ✅ RNDIS interface found: {iface} with IP {ip}")
+                    return iface, ip
+                else:
+                    print(f"  🔍 RNDIS interface found: {iface} (no IP yet)")
+                    return iface, None
+    except Exception:
+        pass
+    return None, None
+
+def setup_rndis_interface(iface):
+    """Setup RNDIS interface with DHCP."""
+    print(f"  🔧 Setting up RNDIS interface: {iface}")
+    
+    # Bring interface up
+    run_cmd(["sudo", IP_PATH, "link", "set", "dev", iface, "up"], check=False)
+    time.sleep(2)
+    
+    # Get IP via DHCP
+    print(f"  📡 Getting IP via DHCP for {iface}...")
+    out, err, rc = run_cmd(["sudo", "dhclient", "-v", iface], check=False, timeout=30)
+    
+    if rc == 0:
+        # Check if we got an IP
+        ip = detect_ipv4(iface)
+        if ip:
+            print(f"  ✅ RNDIS interface {iface} configured with IP: {ip}")
+            return ip
+        else:
+            print(f"  ⚠️ DHCP succeeded but no IP detected on {iface}")
+    else:
+        print(f"  ⚠️ DHCP failed for {iface}: {err}")
+    
+    return None
 
 def detect_modem_port():
+    """Detect AT command port for modem with safe error handling."""
     candidates = [
         "/dev/ttyUSB2", "/dev/ttyUSB1", "/dev/ttyUSB0",
         "/dev/ttyUSB3", "/dev/ttyUSB4"
@@ -100,7 +146,34 @@ def detect_modem_port():
                     return port
         except Exception:
             continue
+    
+    print(f"  ⚠️ No responding AT port found, using default: /dev/ttyUSB2")
     return "/dev/ttyUSB2"
+
+def safe_modem_reset():
+    """Safely reset modem to prevent lockouts."""
+    print("  🔄 Performing safe modem reset...")
+    
+    # Kill any existing PPP processes
+    run_cmd(["sudo", "pkill", "pppd"], check=False)
+    time.sleep(2)
+    
+    # Try to put modem in command mode
+    try:
+        at_port = detect_modem_port()
+        with serial.Serial(at_port, 115200, timeout=1) as ser:
+            ser.write(b"+++\r")
+            time.sleep(3)
+            ser.write(b"AT\r")
+            time.sleep(1)
+            resp = ser.read_all().decode(errors="ignore")
+            if "OK" in resp:
+                print(f"  ✅ Modem reset to command mode")
+                return True
+    except Exception as e:
+        print(f"  ⚠️ Modem reset failed: {e}")
+    
+    return False
 
 def create_ppp_config(apn: str, at_port: str):
     chat_file = "/etc/chatscripts/ee-chat"
@@ -220,16 +293,24 @@ def write_config_yaml():
     print(f"  ✅ config.yaml written (LAN={merged['lan_bind_ip']})")
     return merged
 
-def write_squid_conf(cfg: dict):
+def write_squid_conf(cfg: dict, cellular_ip=None):
     lan_ip = cfg["lan_bind_ip"]
     auth_enabled = bool(cfg["proxy"]["auth_enabled"])
     user = cfg["proxy"]["user"] or ""
     pw = cfg["proxy"]["password"] or ""
 
-    if auth_enabled and user and pw:
-        content = f"""# Squid proxy with auth
-http_port {lan_ip}:3128
+    # Add cellular routing if we have a cellular IP
+    cellular_routing = ""
+    if cellular_ip:
+        cellular_routing = f"""
+# Route traffic through cellular interface
+tcp_outgoing_address {cellular_ip}
+"""
 
+    if auth_enabled and user and pw:
+        content = f"""# Squid proxy with auth and cellular routing
+http_port {lan_ip}:3128
+{cellular_routing}
 auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwd
 auth_param basic children 5
 auth_param basic realm Squid proxy
@@ -253,10 +334,19 @@ cache_log /var/log/squid/cache.log
 dns_nameservers 8.8.8.8 1.1.1.1
 """
     else:
-        content = f"""# Squid proxy without auth
+        content = f"""# Squid proxy without auth and cellular routing
 http_port {lan_ip}:3128
+{cellular_routing}
+# Allow CONNECT to SSL ports for local networks
+acl localnet src 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12
+acl SSL_ports port 443
+acl Safe_ports port 80 443 21 70 210 1025-65535
 
-http_access allow all
+http_access allow localnet CONNECT SSL_ports
+http_access allow localhost CONNECT SSL_ports
+http_access allow localnet
+http_access allow localhost
+http_access deny all
 
 forwarded_for off
 request_header_access X-Forwarded-For deny all
@@ -311,14 +401,38 @@ def write_ecosystem():
 
 # ---------- activation / tests ----------
 
+def activate_modem_via_rndis():
+    """Try to activate modem via RNDIS interface."""
+    print("📡 Activating SIM7600E-H modem via RNDIS…")
+    
+    # First, try to detect existing RNDIS interface
+    iface, ip = detect_rndis_interface()
+    
+    if iface and ip:
+        print(f"  ✅ RNDIS interface {iface} already active with IP {ip}")
+        return iface, ip
+    
+    if iface:
+        # Interface exists but no IP, try to get one
+        ip = setup_rndis_interface(iface)
+        if ip:
+            return iface, ip
+    
+    print("  ❌ RNDIS interface not available")
+    return None, None
+
 def activate_modem_via_ppp(apn: str):
-    print("📡 Activating SIM7600E-H modem over PPP…")
+    """Fallback PPP activation with safety measures."""
+    print("📡 Activating SIM7600E-H modem over PPP (fallback)…")
     print(f"  📡 Using APN: {apn}")
+
+    # Perform safe reset first
+    safe_modem_reset()
 
     print("  🔄 Stopping conflicts (ModemManager, lingering pppd)…")
     run_cmd([SYSTEMCTL_PATH, "stop", "ModemManager"], check=False)
     run_cmd(["sudo", "pkill", "pppd"], check=False)
-    time.sleep(1.5)
+    time.sleep(2)
 
     print("  🔍 Detecting AT port…")
     at_port = detect_modem_port()
@@ -342,6 +456,23 @@ def activate_modem_via_ppp(apn: str):
 
     print("  ❌ ppp0 did not come up in time.")
     return False
+
+def activate_modem(apn: str):
+    """Main modem activation function with RNDIS priority and PPP fallback."""
+    print("🚀 Starting modem activation...")
+    
+    # Try RNDIS first (preferred method)
+    iface, ip = activate_modem_via_rndis()
+    if iface and ip:
+        return "rndis", iface, ip
+    
+    # Fallback to PPP
+    print("  🔄 RNDIS failed, trying PPP fallback...")
+    if activate_modem_via_ppp(apn):
+        return "ppp", "ppp0", None
+    
+    print("  ❌ Both RNDIS and PPP activation failed")
+    return None, None, None
 
 def proxy_test(lan_ip: str):
     try:
@@ -402,18 +533,29 @@ def main():
         print("❌ Run as root: sudo ./run.sh")
         return 1
 
-    print("🚀 Raspberry Pi 5 + SIM7600E-H 4G Proxy (safe policy-routing)")
+    print("🚀 Raspberry Pi 5 + SIM7600E-H 4G Proxy (RNDIS + PPP fallback)")
 
     cfg = write_config_yaml()
-    write_squid_conf(cfg)
     write_ecosystem()
 
     apn = (cfg.get("modem") or {}).get("apn", "everywhere") if isinstance(cfg.get("modem"), dict) else "everywhere"
-    ok = activate_modem_via_ppp(apn)
-    if not ok:
-        print("⚠️ PPP activation did not bring up ppp0; continuing (check logs)")
+    
+    # Try to activate modem (RNDIS first, then PPP fallback)
+    mode, iface, cellular_ip = activate_modem(apn)
+    
+    if mode == "rndis":
+        print(f"  ✅ Cellular connection via RNDIS: {iface} ({cellular_ip})")
+        write_squid_conf(cfg, cellular_ip)
+        # Reload Squid to pick up new config
+        run_cmd([SYSTEMCTL_PATH, "reload", "squid"], check=False)
+    elif mode == "ppp":
+        print(f"  ✅ Cellular connection via PPP: {iface}")
+        write_squid_conf(cfg)
+        keep_primary_and_add_ppp_secondary()
+    else:
+        print("  ⚠️ No cellular connection established; using LAN only")
+        write_squid_conf(cfg)
 
-    keep_primary_and_add_ppp_secondary()
     proxy_test(cfg["lan_bind_ip"])
     summary(cfg)
     return 0
