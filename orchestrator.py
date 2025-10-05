@@ -345,67 +345,94 @@ def rotate():
 
         print(f"Rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, max_attempts={max_attempts}, deep_reset={deep_method or 'none'} ({deep_wait}s)")
 
-        # 1) Kill existing PPP
-        subprocess.run([SUDO_PATH, "-n", PKILL_PATH, "pppd"], check=False)
-        print(f"Waiting {teardown_wait} seconds for PPP teardown...")
-        time.sleep(teardown_wait)
+        # Try rotation attempts with conditional escalation
+        for attempt in range(max_attempts):
+            print(f"\n--- Rotation Attempt {attempt + 1}/{max_attempts} ---")
+            
+            # Kill existing PPP
+            subprocess.run([SUDO_PATH, "-n", PKILL_PATH, "pppd"], check=False)
+            print(f"Waiting {teardown_wait} seconds for PPP teardown...")
+            time.sleep(teardown_wait)
+            
+            if attempt == 0:
+                # First attempt: Simple PPP restart
+                print("Attempt 1: Simple PPP restart")
+                result = subprocess.run([SUDO_PATH, "-n", PPPD_PATH, "call", "ee"],
+                                        capture_output=True, text=True, timeout=30, check=False)
+            else:
+                # Subsequent attempts: Deep reset first, then PPP
+                print(f"Attempt {attempt + 1}: Deep reset + PPP restart")
+                
+                # Deep reset to escape CGNAT stickiness
+                if deep_method in ("mmcli", "at"):
+                    print(f"Performing deep reset ({deep_method}) before PPP restart...")
+                    deep_reset_modem(deep_method, deep_wait)
+                
+                result = subprocess.run([SUDO_PATH, "-n", PPPD_PATH, "call", "ee"],
+                                        capture_output=True, text=True, timeout=30, check=False)
 
-        # 1.5) Optional deep reset to escape sticky CGNAT
-        if deep_method in ("mmcli", "at"):
-            deep_reset_modem(deep_method, deep_wait)
+            # Check if PPP restart succeeded
+            if result.returncode != 0:
+                print(f"PPP restart failed on attempt {attempt + 1}: {result.stderr}")
+                if attempt == max_attempts - 1:
+                    error_msg = f"PPP restart failed after {max_attempts} attempts"
+                    print(f"IP rotation failed: {error_msg}")
+                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
+                    return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                else:
+                    continue  # Try next attempt
 
-        # 2) Start PPP anew
-        result = subprocess.run([SUDO_PATH, "-n", PPPD_PATH, "call", "ee"],
-                                capture_output=True, text=True, timeout=30, check=False)
-        if result.returncode != 0:
-            error_msg = f"PPP restart failed: {result.stderr}"
-            print(f"IP rotation failed: {error_msg}")
-            send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
-            return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+            # Wait for new IP assignment
+            print(f"Waiting {restart_wait} seconds for new IP assignment...")
+            time.sleep(restart_wait)
 
-        print(f"Waiting {restart_wait} seconds for new IP assignment...")
-        time.sleep(restart_wait)
+            # Ensure ppp0 is up
+            try:
+                res = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"], capture_output=True, text=True)
+                if res.returncode != 0 or 'inet ' not in res.stdout:
+                    print(f"ppp0 interface not up after attempt {attempt + 1}")
+                    if attempt == max_attempts - 1:
+                        error_msg = "ppp0 interface not up after restart"
+                        print(f"IP rotation failed: {error_msg}")
+                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
+                        return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                    else:
+                        continue  # Try next attempt
+            except Exception:
+                print(f"Could not check ppp0 status after attempt {attempt + 1}")
+                if attempt == max_attempts - 1:
+                    error_msg = "Could not check ppp0 status"
+                    print(f"IP rotation failed: {error_msg}")
+                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
+                    return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                else:
+                    continue  # Try next attempt
 
-        # 3) Ensure ppp0 is up
-        try:
-            res = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"], capture_output=True, text=True)
-            if res.returncode != 0 or 'inet ' not in res.stdout:
-                error_msg = "ppp0 interface not up after restart"
-                print(f"IP rotation failed: {error_msg}")
-                send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
-                return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
-        except Exception:
-            error_msg = "Could not check ppp0 status"
-            print(f"IP rotation failed: {error_msg}")
-            send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
-            return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+            # Fix routing
+            print("Fixing routing to prefer primary and keep PPP as secondary...")
+            ensure_ppp_default_route()
 
-        # 4) Preserve primary route and add PPP as secondary
-        print("Fixing routing to prefer primary and keep PPP as secondary...")
-        ensure_ppp_default_route()
+            # Check if we got a new IP
+            new_ip = get_current_ip()
+            pdp = at('AT+CGPADDR') if new_ip != "Unknown" else ""
 
-        # 5) Evaluate new IP
-        new_ip = get_current_ip()
-        pdp = at('AT+CGPADDR') if new_ip != "Unknown" else ""
-
-        if new_ip == previous_ip or new_ip == "Unknown":
-            print(f"IP rotation not changed yet: {new_ip} (was {previous_ip})")
-            for attempt in range(1, max_attempts):
-                print(f"Retry attempt {attempt + 1}/{max_attempts}...")
-                time.sleep(max(10, restart_wait // 2))
-                new_ip = get_current_ip()
-                if new_ip != previous_ip and new_ip != "Unknown":
-                    print(f"IP rotation successful on retry {attempt + 1}: {previous_ip} -> {new_ip}")
-                    send_discord_notification(new_ip, previous_ip, is_rotation=True)
-                    return jsonify({'status':'success','pdp':pdp,'public_ip':new_ip,'previous_ip':previous_ip,'attempts':attempt + 1})
-            error_msg = "IP did not change after rotation attempts" if new_ip != "Unknown" else "Failed to get IP address after rotation attempts"
-            print(f"IP rotation failed: {error_msg}")
-            send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
-            return jsonify({'status':'failed','error':error_msg,'pdp':pdp,'public_ip':new_ip,'previous_ip':previous_ip,'attempts':max_attempts}), 400
-        else:
-            print(f"IP rotation successful: {previous_ip} -> {new_ip}")
-            send_discord_notification(new_ip, previous_ip, is_rotation=True)
-            return jsonify({'status':'success','pdp':pdp,'public_ip':new_ip,'previous_ip':previous_ip,'attempts':1})
+            if new_ip != previous_ip and new_ip != "Unknown":
+                # Success! New IP obtained
+                print(f"✅ IP rotation successful on attempt {attempt + 1}: {previous_ip} -> {new_ip}")
+                send_discord_notification(new_ip, previous_ip, is_rotation=True)
+                return jsonify({'status': 'success', 'pdp': pdp, 'public_ip': new_ip, 'previous_ip': previous_ip, 'attempts': attempt + 1})
+            else:
+                # IP didn't change, try next attempt if available
+                print(f"IP unchanged on attempt {attempt + 1}: {new_ip} (was {previous_ip})")
+                if attempt < max_attempts - 1:
+                    print("Trying next attempt with deep reset...")
+                    continue
+                else:
+                    # All attempts failed
+                    error_msg = f"IP did not change after {max_attempts} attempts"
+                    print(f"IP rotation failed: {error_msg}")
+                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
+                    return jsonify({'status': 'failed', 'error': error_msg, 'pdp': pdp, 'public_ip': new_ip, 'previous_ip': previous_ip, 'attempts': max_attempts}), 400
 
     except Exception as e:
         error_msg = f"Rotation failed: {str(e)}"

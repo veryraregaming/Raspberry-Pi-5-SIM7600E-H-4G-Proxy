@@ -24,6 +24,6 @@ rotation:
   max_attempts: 3
   ppp_restart_wait: 30
   ppp_teardown_wait: 60
-  # Deep reset options to escape CGNAT stickiness
+  # Deep reset options to escape CGNAT stickiness (only used after failed attempts)
   deep_reset: "mmcli"  # Options: "mmcli", "at", "" (empty for no deep reset)
-  deep_reset_wait: 120  # seconds to hold the deep reset
+  deep_reset_wait: 180  # seconds to hold the deep reset
