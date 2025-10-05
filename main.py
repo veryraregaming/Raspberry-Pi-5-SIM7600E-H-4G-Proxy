@@ -365,6 +365,11 @@ def summary(cfg: dict):
     print("=" * 60)
 
 def main():
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--ecosystem-only":
+        write_ecosystem()
+        return 0
+    
     if os.geteuid() != 0:
         print("❌ Run as root: sudo ./run.sh")
         return 1

@@ -126,6 +126,15 @@ rm -rf /root/.pm2 || true
 
 # -------- start orchestrator with PM2 as REAL_USER -------------------
 echo "==> Starting PM2 apps as ${REAL_USER}…"
+
+# Ensure ecosystem.config.js exists
+if [[ ! -f "${SCRIPT_DIR}/ecosystem.config.js" ]]; then
+  echo "⚠️ ecosystem.config.js not found, creating it..."
+  python3 "${SCRIPT_DIR}/main.py" --ecosystem-only || true
+fi
+
+# Start PM2 apps fresh (don't try to restart non-existent processes)
+sudo -u "${REAL_USER}" pm2 delete all 2>/dev/null || true
 sudo -u "${REAL_USER}" pm2 start "${SCRIPT_DIR}/ecosystem.config.js" || true
 sudo -u "${REAL_USER}" pm2 save || true
 
