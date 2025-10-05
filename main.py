@@ -433,7 +433,7 @@ def create_config():
     
     print(f"  ✅ LAN IP: {lan_ip}")
     print(f"  ✅ API Token: {cfg['api']['token'][:20]}…")
-    print(f"  ✅ Default APN: everywhere (EE UK - edit config.yaml to customize)")
+    print("  ✅ APN: Auto-detected from carriers.json by run.sh")
     print("  ✅ Proxy auth: disabled (edit config.yaml later if you want auth)")
     print("  ✅ Discord: not configured (edit config.yaml to add webhook URL)")
     return cfg
