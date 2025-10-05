@@ -373,27 +373,51 @@ def create_config():
     
     # Merge existing config with defaults (existing values take priority)
     cfg = default_cfg.copy()
-    for key, value in existing_cfg.items():
-        if isinstance(value, dict) and key in cfg and isinstance(cfg[key], dict):
-            # Merge nested dictionaries
-            cfg[key].update(value)
-        else:
-            # Replace top-level values
-            cfg[key] = value
     
-    # Always update LAN IP and ensure rotation section exists
-    cfg["lan_bind_ip"] = lan_ip
-    if "rotation" not in cfg:
-        cfg["rotation"] = default_cfg["rotation"]
-        print("  ➕ Added missing rotation section")
+    # Deep merge existing config with defaults
+    def deep_merge(existing, default):
+        """Recursively merge existing config with defaults, preserving existing values"""
+        result = default.copy()
+        for key, value in existing.items():
+            if isinstance(value, dict) and key in result and isinstance(result[key], dict):
+                # Recursively merge nested dictionaries
+                result[key] = deep_merge(value, result[key])
+            else:
+                # Use existing value (preserves user settings)
+                result[key] = value
+        return result
     
-    # Preserve existing Discord webhook URL if it's been customized
-    if "discord" in existing_cfg and "webhook_url" in existing_cfg["discord"]:
-        existing_webhook = existing_cfg["discord"]["webhook_url"]
-        default_webhook = default_cfg["discord"]["webhook_url"]
-        if existing_webhook != default_webhook:
-            cfg["discord"]["webhook_url"] = existing_webhook
-            print("  🔗 Preserved existing Discord webhook URL")
+    cfg = deep_merge(existing_cfg, default_cfg)
+    
+    # Only update LAN IP if it's different (network may have changed)
+    if cfg.get("lan_bind_ip") != lan_ip:
+        cfg["lan_bind_ip"] = lan_ip
+        print(f"  🔄 Updated LAN IP: {lan_ip}")
+    
+    # Add missing sections with defaults
+    added_sections = []
+    for section, default_value in default_cfg.items():
+        if section not in existing_cfg:
+            cfg[section] = default_value
+            added_sections.append(section)
+    
+    if added_sections:
+        print(f"  ➕ Added missing sections: {', '.join(added_sections)}")
+    
+    # Log preserved settings
+    preserved_settings = []
+    for section, existing_value in existing_cfg.items():
+        if section in default_cfg and existing_value != default_cfg[section]:
+            if isinstance(existing_value, dict):
+                # Check for meaningful differences in nested dicts
+                for key, value in existing_value.items():
+                    if key in default_cfg[section] and value != default_cfg[section][key]:
+                        preserved_settings.append(f"{section}.{key}")
+            else:
+                preserved_settings.append(section)
+    
+    if preserved_settings:
+        print(f"  🔒 Preserved existing settings: {', '.join(preserved_settings)}")
     
     # Write merged config
     with open("config.yaml", "w") as f:
