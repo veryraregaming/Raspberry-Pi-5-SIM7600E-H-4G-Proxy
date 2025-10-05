@@ -1,16 +1,19 @@
 # Raspberry Pi 5 + SIM7600E-H 4G Proxy
 
-A reliable 4G proxy solution for Raspberry Pi 5 with SIM7600E-H modem. Provides HTTP proxy with automatic SIM card routing via PPP connection.
+A complete 4G mobile proxy solution for Raspberry Pi 5 with SIM7600E-H modem. Routes internet traffic through your SIM card instead of home network, with automatic APN detection, Discord notifications, IP rotation tracking, and comprehensive error handling.
 
 ## 🚀 Features
 
-- **One-Shot Setup**: Single command installation with `sudo ./run.sh`
-- **PPP Connection**: Reliable SIM7600E-H activation via PPP dial-up
-- **Automatic APN Detection**: Works with any UK carrier SIM card
-- **Simple Routing**: Routes proxy traffic through SIM card, keeps WiFi for SSH
-- **HTTP Proxy**: Squid proxy on port 3128
-- **Universal**: Works with any username on any system
-- **No SSH Disconnections**: WiFi remains primary route for stable access
+- **🌐 4G Proxy**: HTTP proxy through SIM card (port 3128)
+- **🔄 IP Rotation**: Automatic IP changes with AT commands and failure tracking
+- **📱 Discord Notifications**: Real-time IP change notifications with history and error reporting
+- **🎯 APN Auto-Detection**: Works with any UK carrier SIM card automatically
+- **🛡️ Error Handling**: Comprehensive failure tracking and detailed error messages
+- **📊 IP History**: Track rotation frequency, uptime, and IP changes
+- **🚀 One-Shot Setup**: Single command installation with `sudo ./run.sh`
+- **🔄 Self-Healing**: Automatic recovery from common issues and PM2 cleanup
+- **🛡️ Universal**: Works with any username on any system
+- **📱 Message Patching**: Discord notifications update same message (no spam)
 
 ## 📋 Requirements
 
@@ -159,6 +162,81 @@ pm2 logs
 pm2 restart 4g-proxy-orchestrator
 ```
 
+## 📡 API Documentation
+
+### **Endpoints**
+
+#### **GET /status**
+Get current proxy status and IP address.
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:8088/status
+```
+
+#### **POST /rotate**
+Attempt IP rotation and notify Discord.
+```bash
+curl -X POST -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:8088/rotate
+```
+
+#### **POST /notify**
+Send Discord status notification.
+```bash
+curl -X POST -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:8088/notify
+```
+
+#### **GET /history**
+Get IP rotation history and statistics.
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:8088/history
+```
+
+#### **POST /test-failure**
+Test failure notification (for debugging).
+```bash
+curl -X POST -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"error": "Test error message"}' \
+  http://127.0.0.1:8088/test-failure
+```
+
+### **Response Formats**
+
+#### **Success Response**
+```json
+{
+  "status": "success",
+  "public_ip": "192.168.1.100",
+  "previous_ip": "188.28.48.189",
+  "pdp": "+CGPADDR: 1,192.168.1.100"
+}
+```
+
+#### **Failure Response**
+```json
+{
+  "status": "failed",
+  "error": "IP did not change after rotation attempt",
+  "public_ip": "188.28.48.189",
+  "previous_ip": "188.28.48.189"
+}
+```
+
+#### **History Response**
+```json
+{
+  "ips": [
+    {
+      "ip": "192.168.1.100",
+      "timestamp": "2025-10-05T14:30:15",
+      "time": "14:30:15",
+      "date": "05/10/2025"
+    }
+  ],
+  "rotations": 3,
+  "first_seen": "2025-10-05T12:15:00"
+}
+```
+
 ### **PPP Connection**
 ```bash
 # Check PPP status
@@ -257,12 +335,72 @@ raspi-4g-proxy-v2/
 4. **Proxy Traffic**: Squid routes through ppp0 to SIM card
 5. **APN Detection**: Automatically tries APNs from carriers.json
 
+## 🔧 Troubleshooting
+
+### **Common Issues**
+
+#### **Proxy routes through home network instead of SIM**
+```bash
+# Check if ppp0 is up and has IP
+ip addr show ppp0
+
+# Check routing table
+ip route show
+
+# Restart PPP connection
+sudo pkill pppd
+sudo pppd call ee
+```
+
+#### **Discord notifications not working**
+```bash
+# Check webhook URL in config
+grep webhook_url config.yaml
+
+# Test notification
+python3 test_discord.py
+
+# Check orchestrator logs
+pm2 logs 4g-proxy-orchestrator
+```
+
+#### **IP rotation fails**
+```bash
+# Check modem connection
+sudo mmcli -m 0
+
+# Test AT commands
+echo "AT" | sudo tee /dev/ttyUSB2
+
+# Check rotation history
+curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:8088/history
+```
+
+#### **PM2 services not starting**
+```bash
+# Check PM2 status
+pm2 status
+
+# Restart PM2 services
+pm2 restart all
+
+# Check logs
+pm2 logs
+```
+
+### **Log Locations**
+- **Squid**: `sudo tail -f /var/log/squid/access.log`
+- **PPP**: `sudo tail -f /var/log/ppp-ee.log`
+- **PM2**: `pm2 logs 4g-proxy-orchestrator`
+- **System**: `sudo journalctl -f`
+
 ## 🛡️ Security Notes
 
 - **Never commit `config.yaml`** - it contains sensitive tokens
 - Use strong, random tokens for API authentication
 - Consider firewall rules to restrict proxy access
 - Monitor logs for unauthorized access attempts
+- Discord webhook URLs are sensitive - keep them private
 
 ## 📝 License
 
