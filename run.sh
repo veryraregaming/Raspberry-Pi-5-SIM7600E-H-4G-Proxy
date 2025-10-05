@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# --- cleanup old PM2 processes first ---
+echo "==> Cleaning up old PM2 processes..."
+pm2 delete 4g-proxy-squid 2>/dev/null || true
+pm2 delete 4g-proxy-3proxy 2>/dev/null || true
+pm2 delete 4g-proxy 2>/dev/null || true
+pm2 delete 4g-proxy-auto-rotate 2>/dev/null || true
+pm2 kill 2>/dev/null || true
+echo "✅ Old PM2 processes cleaned up"
+
 # --- ensure networking/DNS available before anything else ---
 echo "==> Checking internet connectivity..."
 TRIES=0
@@ -246,11 +255,6 @@ rm -rf /root/.pm2
 
 # ---- Start PM2 as REAL_USER (and enable systemd autostart) -----------------
 echo "==> Starting PM2 as ${REAL_USER}…"
-# Clean up old PM2 processes that shouldn't exist anymore
-echo "==> Cleaning up old PM2 processes..."
-sudo -u "${REAL_USER}" pm2 delete 4g-proxy-squid 2>/dev/null || true
-sudo -u "${REAL_USER}" pm2 delete 4g-proxy-3proxy 2>/dev/null || true
-sudo -u "${REAL_USER}" pm2 delete 4g-proxy 2>/dev/null || true
 sudo -u "${REAL_USER}" pm2 start "${SCRIPT_DIR}/ecosystem.config.js" || true
 sudo -u "${REAL_USER}" pm2 save || true
 
