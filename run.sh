@@ -114,8 +114,11 @@ fi
 echo "==> Running main.py to write configs and bring PPP up…"
 python3 "${SCRIPT_DIR}/main.py" || true
 
-# -------- ensure ModemManager is not holding ports for PPP -----------
-# (main.py stops it already, but we keep it idempotent here)
+# -------- ensure services are in correct state ------------------------
+# ensure Squid is enabled and running (usually auto-starts after install)
+systemctl enable --now squid || true
+
+# ensure ModemManager is not holding ports for PPP (main.py stops it, but keep idempotent)
 systemctl stop ModemManager || true
 
 # ---- make sure PM2 is NOT running as root --------------------------------
@@ -131,6 +134,9 @@ echo "==> Starting PM2 apps as ${REAL_USER}…"
 sudo -u "${REAL_USER}" pm2 delete all || true
 sudo -u "${REAL_USER}" pm2 kill || true
 rm -f "${REAL_HOME}/.pm2/dump.pm2"
+
+# ensure ecosystem.config.js exists before pm2 start
+[[ -f "${SCRIPT_DIR}/ecosystem.config.js" ]] || python3 "${SCRIPT_DIR}/main.py" --ecosystem-only
 
 # start only the orchestrator app from ecosystem
 sudo -u "${REAL_USER}" pm2 start "${SCRIPT_DIR}/ecosystem.config.js" --only 4g-proxy-orchestrator
