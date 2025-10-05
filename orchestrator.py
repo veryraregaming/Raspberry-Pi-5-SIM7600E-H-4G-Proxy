@@ -304,9 +304,9 @@ def rotate():
         print("Fixing routing to use ppp0...")
         try:
             # Remove any existing default route (WiFi might have taken over)
-            subprocess.run(['sudo', 'ip', 'route', 'del', 'default'], check=False)
+            subprocess.run(['sudo', '-u', 'rare', 'sudo', 'ip', 'route', 'del', 'default'], check=False)
             # Add default route through ppp0 with higher metric (lower priority than WiFi)
-            subprocess.run(['sudo', 'ip', 'route', 'add', 'default', 'dev', 'ppp0', 'metric', '200'], check=True)
+            subprocess.run(['sudo', '-u', 'rare', 'sudo', 'ip', 'route', 'add', 'default', 'dev', 'ppp0', 'metric', '200'], check=True)
             print("Routing fixed - traffic will go through ppp0")
         except Exception as e:
             print(f"Warning: Could not fix routing: {e}")
