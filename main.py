@@ -485,16 +485,6 @@ def create_pm2_ecosystem():
             "max_restarts": 10,
             "restart_delay": 5000,
             "env": {"PYTHONPATH": script_dir}
-        },
-        {
-            "name": "4g-proxy-squid",
-            "script": "squid",
-            "args": "-N -f /etc/squid/squid.conf",
-            "interpreter": "none",
-            "cwd": script_dir,
-            "autorestart": True,
-            "max_restarts": 10,
-            "restart_delay": 5000
         }
     ]
     with open("ecosystem.config.js","w") as f:
@@ -570,8 +560,8 @@ def test_and_print(cfg):
     print(f"🌐 Current Public IP: {current_ip}")
     print("🧪 Test:")
     print(f"  curl -x http://{lan_ip}:3128 https://api.ipify.org")
-    print("🔧 PM2: pm2 status | pm2 logs | pm2 restart all")
-    print("⚙️ Edit config.yaml for auth, then: pm2 restart 4g-proxy-squid")
+    print("🔧 Squid: sudo systemctl status squid | sudo systemctl restart squid")
+    print("⚙️ Edit config.yaml for auth, then: sudo systemctl restart squid")
     print("="*60)
 
 # ----------------- main -----------------
