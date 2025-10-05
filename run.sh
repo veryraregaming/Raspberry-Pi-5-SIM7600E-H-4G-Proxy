@@ -31,14 +31,14 @@ echo "✅ State directory created"
 echo "==> Setting up sudoers for PPP and routing..."
 
 # Find full paths for commands (they matter in sudoers)
-PKILL_PATH=$(which pkill)
-PPPD_PATH=$(which pppd)
-IP_PATH=$(which ip)
+PKILL_PATH=$(which pkill || echo /usr/bin/pkill)
+PPPD_PATH=$(which pppd || echo /usr/sbin/pppd)
+IP_PATH=$(which ip || echo /usr/sbin/ip)
 
 echo "  📍 Command paths: pkill=$PKILL_PATH, pppd=$PPPD_PATH, ip=$IP_PATH"
 
 # Create comprehensive sudoers rule with command aliases and !requiretty
-sudo tee /etc/sudoers.d/4g-proxy >/dev/null <<EOF
+cat >/etc/sudoers.d/4g-proxy <<EOF
 # 4G Proxy sudoers rule for ${REAL_USER}
 Cmnd_Alias PROXY_CMDS = \\
   ${PKILL_PATH} pppd, \\
@@ -50,8 +50,12 @@ ${REAL_USER} ALL=(root) NOPASSWD: PROXY_CMDS
 Defaults:${REAL_USER} !requiretty
 EOF
 
-sudo chmod 0440 /etc/sudoers.d/4g-proxy
-sudo visudo -c >/dev/null 2>&1 && echo "✅ Sudoers configured" || echo "⚠️  Sudoers validation failed"
+chmod 0440 /etc/sudoers.d/4g-proxy
+if visudo -c >/dev/null 2>&1; then
+  echo "✅ Sudoers configured"
+else
+  echo "⚠️  Sudoers validation failed"
+fi
 
 # --- ensure networking/DNS available before anything else ---
 echo "==> Checking internet connectivity..."
@@ -65,30 +69,24 @@ while ! ping -c1 -W1 1.1.1.1 >/dev/null 2>&1; do
   sleep 1
 done
 
-# ensure at least one usable resolver (for early Ubuntu netplans that miss it)
-RESOLV_OK=$(grep -E 'nameserver' /etc/resolv.conf 2>/dev/null | wc -l)
+# ensure at least one usable resolver
+RESOLV_OK=$(grep -E 'nameserver' /etc/resolv.conf 2>/dev/null | wc -l || echo 0)
 if [ "$RESOLV_OK" -lt 1 ]; then
-  echo "==> No resolvers found; setting temporary Cloudflare DNS"
-  echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" | sudo tee /etc/resolv.conf >/dev/null
+  echo "==> No resolvers found; setting temporary Cloudflare/Google DNS"
+  printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' >/etc/resolv.conf
 fi
 
-# quick DNS test with fallback resolvers
+# Optional: try to nudge systemd-resolved if available
 if ! curl -fsSL --max-time 5 https://deb.nodesource.com >/dev/null 2>&1; then
-  echo "==> DNS may be lagging; adding fallback resolvers via resolvectl..."
-  sudo resolvectl dns wlan0 1.1.1.1 9.9.9.9 8.8.8.8 2>/dev/null || true
-  sudo resolvectl domain wlan0 ~. 2>/dev/null || true
-  sudo resolvectl flush-caches 2>/dev/null || true
+  echo "==> DNS may be lagging; attempting resolvectl (best-effort)…"
+  resolvectl dns wlan0 1.1.1.1 9.9.9.9 8.8.8.8 2>/dev/null || true
+  resolvectl domain wlan0 ~. 2>/dev/null || true
+  resolvectl flush-caches 2>/dev/null || true
   sleep 2
 fi
 
 # ============================================================================
 # One-shot installer/runner for Raspberry-Pi-5-SIM7600E-H-4G-Proxy
-# - Installs deps (apt, Node.js, PM2, 3proxy)
-# - Writes/ensures helper scripts (4gproxy-net.sh, run_3proxy.sh)
-# - Generates config, sets safe policy routing (no default route change)
-# - Starts services with PM2 under the REAL login user (not root)
-# - Ensures rare->proxyuser sudo for /usr/local/bin/3proxy ONLY (NOPASSWD)
-# - Verifies API, Proxy, and prints a summary
 # ============================================================================
 
 # ---- guardrails -------------------------------------------------------------
@@ -131,34 +129,18 @@ fi
 echo "✅ Squid installed"
 
 # ---- Ensure helper scripts exist (idempotent) ------------------------------
-# Create apn.txt if it doesn't exist
 if [[ ! -f "${SCRIPT_DIR}/apn.txt" ]]; then
   echo "==> Creating apn.txt with common APNs…"
   cat > "${SCRIPT_DIR}/apn.txt" <<'EOF'
-# APN list for automatic carrier detection
-# Format: one APN per line, comments start with #
-# The system will try these in order until one works
-
-# EE (UK) - your carrier
+# APN list (one per line)
 everywhere
-
-# Generic APNs that work for most carriers
 internet
 web
 data
 broadband
 mobile
 3gnet
-
-# Carrier-specific APNs
 fast.t-mobile.com
-broadband
-internet
-internet
-internet
-internet
-
-# Additional common APNs
 wap
 gprs
 mms
@@ -168,54 +150,7 @@ lte
 EOF
 fi
 
-# Create run_squid.sh if it doesn't exist
-if [[ ! -f "${SCRIPT_DIR}/run_squid.sh" ]]; then
-  echo "==> Creating run_squid.sh…"
-  cat > "${SCRIPT_DIR}/run_squid.sh" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CFG="${SCRIPT_DIR}/squid.conf"
-PROXY_USER="proxyuser"
-
-# Check if squid is installed
-if ! command -v squid >/dev/null; then
-  echo "Squid not found. Installing..."
-  sudo apt update
-  sudo apt install -y squid
-fi
-
-# Ensure proxyuser exists
-if ! id -u "${PROXY_USER}" >/dev/null 2>&1; then
-  sudo useradd --system --no-create-home --shell /usr/sbin/nologin "${PROXY_USER}"
-fi
-
-# Check if config file exists
-if [[ ! -f "${CFG}" ]]; then
-  echo "Squid config not found at ${CFG}"
-  exit 1
-fi
-
-# Create log directory
-sudo mkdir -p /var/log/squid
-sudo chown proxyuser:proxyuser /var/log/squid
-
-# Create cache directory
-sudo mkdir -p /var/spool/squid
-sudo chown proxyuser:proxyuser /var/spool/squid
-
-# Start squid
-echo "Starting Squid with config: ${CFG}"
-exec sudo -u "${PROXY_USER}" squid -N -f "${CFG}"
-EOF
-  chmod +x "${SCRIPT_DIR}/run_squid.sh"
-fi
-
-# Use the updated 4gproxy-net.sh script from scripts/ directory
-# (The script is already in the repo with the latest fixes)
-
-# run_squid.sh — run squid as proxyuser (for owner match)
+# Create/refresh run_squid.sh (runs squid as proxyuser)
 cat > "${SCRIPT_DIR}/run_squid.sh" <<'EOSH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -224,12 +159,11 @@ CFG="${SCRIPT_DIR}/squid.conf"
 PROXY_USER="proxyuser"
 command -v squid >/dev/null || { echo "squid not found"; exit 1; }
 id -u "${PROXY_USER}" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "${PROXY_USER}"
-# Use sudo to drop to proxyuser (pm2 runs as REAL_USER)
 exec sudo -u "${PROXY_USER}" squid -N -f "${CFG}"
 EOSH
 chmod +x "${SCRIPT_DIR}/run_squid.sh"
 
-# ---- Allow REAL_USER to exec squid as proxyuser (NOPASSWD, minimal scope) -
+# ---- Allow REAL_USER to exec squid as proxyuser (NOPASSWD, minimal scope) --
 SUDOERS_FILE="/etc/sudoers.d/squid"
 if ! grep -q "^${REAL_USER} " "${SUDOERS_FILE}" 2>/dev/null; then
   echo "==> Adding sudoers rule for ${REAL_USER} -> proxyuser (squid only)…"
@@ -237,46 +171,37 @@ if ! grep -q "^${REAL_USER} " "${SUDOERS_FILE}" 2>/dev/null; then
   chmod 440 "${SUDOERS_FILE}"
 fi
 
-# ---- Generate config + squid.conf + simple PPP routing -------------------
+# ---- Generate config, ensure modem, write ecosystem, etc. -------------------
 echo "==> Running main.py to setup config and network…"
-# main.py will:
-#  - auto-detect LAN IP, write config.yaml & squid.conf (no auth by default)
-#  - activate SIM7600E-H modem with PPP
-#  - setup simple routing via ppp0
-#  - write ecosystem.config.js
 python3 "${SCRIPT_DIR}/main.py" || true
 
-# ---- Ensure modem is activated and interface is up -------------------------
 echo "==> Ensuring cellular interface is ready…"
-# Wait a moment for modem activation
 sleep 3
 
-# Check if wwan0 is up, if not bring it up
-if ! ip link show wwan0 | grep -q "state UP\|state UNKNOWN"; then
-  echo "==> Bringing up wwan0 interface…"
+# Try to bring up a likely cellular iface
+if ip link show wwan0 >/dev/null 2>&1; then
   ip link set wwan0 up || true
   sleep 2
 fi
 
-# Check if we have a cellular interface
+# Discover a cellular-like interface for diagnostics
 CELL_IFACE=""
 for pattern in 'wwan' 'ppp' 'usb' 'eth1' 'eth2' 'eth3' 'enx' 'cdc'; do
   CELL_IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -E "^${pattern}" | head -n1 || true)
-  if [[ -n "${CELL_IFACE:-}" ]]; then
-    if [[ "${CELL_IFACE}" == "eth0" || "${CELL_IFACE}" == "wlan0" ]]; then
-      CELL_IFACE=""
-      continue
-    fi
-    if ip link show "${CELL_IFACE}" | grep -q "state UP\|state UNKNOWN"; then
-      echo "==> Found cellular interface: ${CELL_IFACE}"
-      break
-    fi
+  [[ -n "${CELL_IFACE:-}" ]] || continue
+  if [[ "${CELL_IFACE}" == "eth0" || "${CELL_IFACE}" == "wlan0" ]]; then
     CELL_IFACE=""
+    continue
   fi
+  if ip link show "${CELL_IFACE}" | grep -qE "state (UP|UNKNOWN)"; then
+    echo "==> Found cellular interface: ${CELL_IFACE}"
+    break
+  fi
+  CELL_IFACE=""
 done
 
 if [[ -z "${CELL_IFACE:-}" ]]; then
-  echo "⚠️  No cellular interface found - proxy will use home network"
+  echo "⚠️  No cellular interface found - proxy may use home network"
 else
   echo "✅ Cellular interface ready: ${CELL_IFACE}"
 fi
@@ -292,53 +217,39 @@ echo "==> Starting PM2 as ${REAL_USER}…"
 sudo -u "${REAL_USER}" pm2 start "${SCRIPT_DIR}/ecosystem.config.js" || true
 sudo -u "${REAL_USER}" pm2 save || true
 
-# Generate and run the startup command PM2 expects
 START_CMD=$(sudo -u "${REAL_USER}" pm2 startup systemd -u "${REAL_USER}" --hp "${REAL_HOME}" | tail -n 1 | sed 's/^.*PM2.*: //')
-# Some PM2 versions output the exact command differently; fallback if empty
 if [[ -z "${START_CMD}" ]]; then
   START_CMD="sudo env PATH=$PATH pm2 startup systemd -u ${REAL_USER} --hp ${REAL_HOME} -y"
 fi
 eval "${START_CMD}" || true
 
-# ---- Wait for services to start and verify ----------------------------------
+# ---- Wait for services to start and verify ---------------------------------
 echo "==> Waiting for services to start…"
 sleep 5
 
-# Check if Squid is running and fix if needed
-if sudo ss -ltnp | grep -q ":3128"; then
+# Check Squid
+if ss -ltnp 2>/dev/null | grep -q ":3128"; then
   echo "✅ Squid proxy is running on port 3128"
 else
-  echo "⚠️  Squid proxy not detected on port 3128, fixing..."
-  
-  # Fix squid.conf permissions if needed
-  if [[ -f "${SCRIPT_DIR}/squid.conf" ]]; then
-    sudo chown proxyuser:proxyuser "${SCRIPT_DIR}/squid.conf" 2>/dev/null || true
-    sudo chmod 644 "${SCRIPT_DIR}/squid.conf" 2>/dev/null || true
-  fi
-  
-  # Ensure run_squid.sh is executable
+  echo "⚠️  Squid proxy not detected on port 3128, attempting restart..."
   chmod +x "${SCRIPT_DIR}/run_squid.sh" 2>/dev/null || true
-  
-  # Restart PM2 services
   sudo -u "${REAL_USER}" pm2 restart all || true
   sleep 3
-  
-  # Check again
-  if sudo ss -ltnp | grep -q ":3128"; then
+  if ss -ltnp 2>/dev/null | grep -q ":3128"; then
     echo "✅ Squid proxy is now running on port 3128"
   else
-    echo "⚠️  Squid proxy still not running, but continuing..."
+    echo "⚠️  Squid proxy still not running, continuing..."
   fi
 fi
 
-# Check if API is running
-if sudo ss -ltnp | grep -q ":8088"; then
+# Check API
+if ss -ltnp 2>/dev/null | grep -q ":8088"; then
   echo "✅ API server is running on port 8088"
 else
   echo "⚠️  API server not detected on port 8088"
 fi
 
-# ---- Gentle wait for the API to boot ---------------------------------------
+# Wait for API readiness
 echo "==> Waiting for API (127.0.0.1:8088)…"
 for i in {1..12}; do
   if curl -s --max-time 2 http://127.0.0.1:8088/status >/dev/null; then
@@ -348,10 +259,9 @@ for i in {1..12}; do
   sleep 1
 done
 
-# ---- Tests & summary -------------------------------------------------------
+# Summary
 LAN_IP="$(ip -4 addr show wlan0 | awk '/inet /{print $2}' | cut -d/ -f1)"
 if [[ -z "${LAN_IP}" ]]; then
-  # try eth0 as a fallback bind
   LAN_IP="$(ip -4 addr show eth0 | awk '/inet /{print $2}' | cut -d/ -f1)"
 fi
 
@@ -361,7 +271,6 @@ if [[ -n "${LAN_IP}" ]]; then
   PROXY_IP="$(curl -s --max-time 8 -x "http://${LAN_IP}:3128" https://api.ipify.org || echo 'Unknown')"
 fi
 
-# Determine if proxy is using cellular or home network
 if [[ "${PROXY_IP}" != "Unknown" && "${PROXY_IP}" != "${DIRECT_IP}" ]]; then
   NETWORK_TYPE="Cellular (SIM card)"
 else
@@ -388,6 +297,6 @@ echo "  Edit ${SCRIPT_DIR}/config.yaml for APN/auth settings"
 echo "  Then: pm2 restart 4g-proxy-squid"
 echo ""
 echo "🧪 Test Commands:"
-echo "  curl -s https://api.ipify.org && echo                    # Direct IP"
-echo "  curl -x http://${LAN_IP}:3128 -s https://api.ipify.org && echo  # Proxy IP"
+echo "  curl -s https://api.ipify.org && echo"
+echo "  curl -x http://${LAN_IP}:3128 -s https://api.ipify.org && echo"
 echo "============================================================"

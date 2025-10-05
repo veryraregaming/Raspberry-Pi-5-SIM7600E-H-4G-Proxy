@@ -1,688 +1,302 @@
-#!/usr/bin/env python3
-"""
-Raspberry Pi 5 + SIM7600E-H 4G Proxy - Auto Setup (safe routing version)
-- Keeps system default route intact (no messing with eth0/wlan0)
-- Routes ONLY proxy traffic via SIM using policy routing
-- PM2-managed services
-"""
+#!/usr/bin/env bash
+set -euo pipefail
 
-import os
-import sys
-import subprocess
-import yaml
-import json
-import secrets
-import socket
-import time
-import requests
-import serial
+# --- cleanup old PM2 processes first ---
+echo "==> Cleaning up old PM2 processes..."
+pm2 delete 4g-proxy-squid 2>/dev/null || true
+pm2 delete 4g-proxy-3proxy 2>/dev/null || true
+pm2 delete 4g-proxy 2>/dev/null || true
+pm2 delete 4g-proxy-auto-rotate 2>/dev/null || true
+pm2 kill 2>/dev/null || true
+echo "✅ Old PM2 processes cleaned up"
 
-# ----------------- helpers -----------------
+# --- define user variables early ---
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
+if [[ -z "${REAL_HOME}" || ! -d "${REAL_HOME}" ]]; then
+  echo "Could not determine home directory for REAL_USER=$REAL_USER"
+  exit 1
+fi
 
-def run_cmd(cmd, check=True):
-    try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=check)
-        return r.stdout.strip(), r.stderr.strip()
-    except subprocess.CalledProcessError as e:
-        print(f"[cmd] {cmd}\n[err] {e.stderr}")
-        return "", e.stderr
+echo "==> Running as root for setup; PM2 will run as user: ${REAL_USER} (${REAL_HOME})"
 
-def detect_lan_ip():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        local_ip = s.getsockname()[0]
-        s.close()
-        return local_ip
-    except Exception:
-        out, _ = run_cmd("ip route | awk '/default/ {print $5}' | head -n1")
-        if out:
-            ip_out, _ = run_cmd(f"ip addr show {out} | awk '/inet / {{print $2}}' | cut -d/ -f1")
-            if ip_out:
-                return ip_out
-        return "192.168.1.37"
+# --- create state directory with proper permissions ---
+echo "==> Setting up state directory..."
+mkdir -p state
+chown -R ${REAL_USER}:${REAL_USER} state 2>/dev/null || true
+chmod 755 state
+echo "✅ State directory created"
 
-def generate_token():
-    return secrets.token_urlsafe(64)
+# --- setup sudoers for PPP and routing commands ---
+echo "==> Setting up sudoers for PPP and routing..."
 
-def detect_modem_port():
-    # Try common ports in order of likelihood
-    common_ports = ['/dev/ttyUSB2', '/dev/ttyUSB1', '/dev/ttyUSB0', '/dev/ttyUSB3', '/dev/ttyUSB4']
-    
-    for port in common_ports:
-        if os.path.exists(port):
-            # Test if modem responds on this port
-            try:
-                with serial.Serial(port, 115200, timeout=1) as ser:
-                    ser.write(b'AT\r\n')
-                    time.sleep(0.5)
-                    response = ser.read_all().decode(errors='ignore')
-                    if "OK" in response:
-                        print(f"  ✅ Modem responding on {port}")
-                        return port
-            except:
-                continue
-    
-    # Fallback to any available ttyUSB
-    for dev in os.listdir('/dev'):
-        if dev.startswith('ttyUSB'):
-            return f'/dev/{dev}'
-    
-    return '/dev/ttyUSB2'  # Default fallback
+# Find full paths for commands (they matter in sudoers)
+PKILL_PATH=$(which pkill || echo /usr/bin/pkill)
+PPPD_PATH=$(which pppd || echo /usr/sbin/pppd)
+IP_PATH=$(which ip || echo /usr/sbin/ip)
 
-def create_ppp_config(apn, port):
-    """Create PPP configuration files (idempotent)"""
-    chat_file = "/etc/chatscripts/ee-chat"
-    peer_file = "/etc/ppp/peers/ee"
-    log_file = "/var/log/ppp-ee.log"
-    
-    # Create chat script if missing
-    if not os.path.exists(chat_file):
-        print(f"  📝 Creating {chat_file}...")
-        chat_script = f'''ABORT 'BUSY'
-ABORT 'NO CARRIER'
-ABORT 'ERROR'
-ABORT 'NO DIALTONE'
-ABORT 'NO ANSWER'
-REPORT CONNECT
-TIMEOUT 60
-'' AT
-OK 'ATZ'
-OK 'AT+CPIN?'
-OK 'AT+CFUN=1'
-OK 'AT+CGATT=1'
-OK 'AT+CGDCONT=1,"IP","{apn}"'
-OK 'ATD*99#'
-CONNECT '''''
-        
-        run_cmd("sudo mkdir -p /etc/chatscripts", check=False)
-        with open("/tmp/ee-chat", "w") as f:
-            f.write(chat_script)
-        run_cmd("sudo cp /tmp/ee-chat /etc/chatscripts/ee-chat", check=False)
-        run_cmd("sudo chmod 644 /etc/chatscripts/ee-chat", check=False)
-    else:
-        print(f"  ✅ {chat_file} already exists")
-        # Update APN in existing file
-        run_cmd(f'sudo sed -i "s/AT+CGDCONT=1,\\\"IP\\\",\\\".*\\\"/AT+CGDCONT=1,\\\"IP\\\",\\\"{apn}\\\"/" {chat_file}', check=False)
-    
-    # Create peer file if missing
-    if not os.path.exists(peer_file):
-        print(f"  📝 Creating {peer_file}...")
-        peer_config = f'''{port}
-115200
-crtscts
-lock
-noauth
-defaultroute
-usepeerdns
-persist
-hide-password
-ipcp-accept-local
-ipcp-accept-remote
-lcp-echo-interval 10
-lcp-echo-failure 6
-debug
-logfile {log_file}
-connect "/usr/sbin/chat -v -f {chat_file}"'''
-        
-        with open("/tmp/ee-peer", "w") as f:
-            f.write(peer_config)
-        run_cmd("sudo cp /tmp/ee-peer /etc/ppp/peers/ee", check=False)
-        run_cmd("sudo chmod 644 /etc/ppp/peers/ee", check=False)
-    else:
-        print(f"  ✅ {peer_file} already exists")
-        # Update port in existing file
-        run_cmd(f'sudo sed -i "1s|^/dev/ttyUSB.*$|{port}|" {peer_file}', check=False)
+echo "  📍 Command paths: pkill=$PKILL_PATH, pppd=$PPPD_PATH, ip=$IP_PATH"
 
-def send_at_command(cmd, port=None, timeout=2):
-    """Send AT command to modem and return response"""
-    if port is None:
-        port = detect_modem_port()
-    
-    try:
-        with serial.Serial(port, 115200, timeout=timeout) as ser:
-            ser.write((cmd + '\r\n').encode())
-            time.sleep(0.5)
-            response = ser.read_all().decode(errors='ignore').strip()
-            return response
-    except Exception as e:
-        print(f"  ⚠️ AT command failed: {e}")
-        return ""
+# Create comprehensive sudoers rule with command aliases and !requiretty
+cat >/etc/sudoers.d/4g-proxy <<EOF
+# 4G Proxy sudoers rule for ${REAL_USER}
+Cmnd_Alias PROXY_CMDS = \\
+  ${PKILL_PATH} pppd, \\
+  ${PPPD_PATH} *, \\
+  ${IP_PATH} route del default, \\
+  ${IP_PATH} route add default dev ppp0 metric 200
 
-def load_carrier_config(apn):
-    """Load carrier configuration from carriers.json"""
-    try:
-        with open("carriers.json", "r") as f:
-            carriers = json.load(f)
-        
-        # Find carrier by APN
-        for carrier_id, carrier_info in carriers["carriers"].items():
-            if carrier_info["apn"] == apn:
-                return carrier_info
-        
-        # If not found, return default EE config
-        return carriers["carriers"]["ee"]
-    except:
-        # Fallback to EE config
-        return {
-            "name": "EE Internet",
-            "apn": "everywhere",
-            "username": "eesecure",
-            "password": "secure",
-            "ip_type": "ipv4"
-        }
+${REAL_USER} ALL=(root) NOPASSWD: PROXY_CMDS
+Defaults:${REAL_USER} !requiretty
+EOF
 
-def activate_modem():
-    """Activate SIM7600E-H modem using PPP"""
-    print("📡 Activating SIM7600E-H modem...")
-    
-    # Load config to get APN
-    try:
-        with open("config.yaml", "r") as f:
-            config = yaml.safe_load(f)
-        apn = config.get("modem", {}).get("apn", "everywhere")
-    except:
-        apn = "everywhere"
-    
-    # Load carrier configuration
-    carrier = load_carrier_config(apn)
-    print(f"  📡 Using APN: {apn} ({carrier['name']})")
-    
-    # Stop conflicts
-    print("  🔄 Stopping conflicts...")
-    run_cmd("sudo systemctl stop ModemManager", check=False)
-    run_cmd("sudo pkill pppd", check=False)
-    time.sleep(2)
-    
-    # Install PPP if needed
-    print("  📦 Installing PPP...")
-    run_cmd("sudo apt update", check=False)
-    run_cmd("sudo apt install -y ppp", check=False)
-    
-    # Detect AT port
-    print("  🔍 Detecting AT port...")
-    port = detect_modem_port()
-    print(f"  📡 Using AT port: {port}")
-    
-    # Create PPP configuration
-    print("  🔧 Creating PPP configuration...")
-    create_ppp_config(apn, port)
-    
-    # Start PPP connection
-    print("  🚀 Starting PPP connection...")
-    run_cmd("sudo pppd call ee", check=False)
-    
-    # Wait for ppp0 to come up
-    print("  ⏳ Waiting for ppp0...")
-    for i in range(30):
-        time.sleep(1)
-        result = run_cmd("ip -4 addr show dev ppp0", check=False)
-        if "inet " in result[0]:
-            print("  ✅ ppp0 is up with IPv4")
-            # Keep WiFi as primary route
-            keep_wifi_primary()
-            return True
-    
-    print("  ⚠️ ppp0 did not come up, trying fallback...")
-    return False
+chmod 0440 /etc/sudoers.d/4g-proxy
+if visudo -c >/dev/null 2>&1; then
+  echo "✅ Sudoers configured"
+else
+  echo "⚠️  Sudoers validation failed"
+fi
 
-def keep_wifi_primary():
-    """Keep WiFi as primary route, PPP as secondary"""
-    try:
-        # Get current default route
-        result = run_cmd("ip route show default", check=False)
-        if result and result[0]:
-            default_line = result[0]
-            # Extract gateway and device
-            parts = default_line.split()
-            gw = None
-            dev = None
-            metric = 100
-            
-            for i, part in enumerate(parts):
-                if part == "via" and i+1 < len(parts):
-                    gw = parts[i+1]
-                elif part == "dev" and i+1 < len(parts):
-                    dev = parts[i+1]
-                elif part == "metric" and i+1 < len(parts):
-                    metric = int(parts[i+1])
-            
-            if gw and dev and dev not in ["ppp0"]:
-                print(f"  🔄 Keeping {dev} as primary route (metric {metric})")
-                # Ensure WiFi stays primary - CRITICAL for SSH stability
-                run_cmd(f"sudo ip route replace default via {gw} dev {dev} metric {metric}", check=False)
-                # Add PPP as secondary with higher metric (lower priority)
-                run_cmd(f"sudo ip route add default dev ppp0 metric {metric+500}", check=False)
-                print(f"  ✅ WiFi ({dev}) remains primary for SSH access")
-    except:
-        pass
+# --- ensure networking/DNS available before anything else ---
+echo "==> Checking internet connectivity..."
+TRIES=0
+while ! ping -c1 -W1 1.1.1.1 >/dev/null 2>&1; do
+  TRIES=$((TRIES+1))
+  if [ "$TRIES" -gt 15 ]; then
+    echo "⚠️  Network still unreachable after 15s, continuing anyway"
+    break
+  fi
+  sleep 1
+done
 
-def try_common_apns(port):
-    """Try common APN configurations if default fails"""
-    print("  🔄 Trying APNs from carriers.json...")
-    
-    # Load carriers from JSON file
-    carriers_to_try = []
-    try:
-        with open("carriers.json", "r") as f:
-            carriers = json.load(f)
-        
-        # Add all carriers from JSON
-        for carrier_id, carrier_info in carriers["carriers"].items():
-            carriers_to_try.append(carrier_info)
-        
-        print(f"  📋 Loaded {len(carriers_to_try)} carriers from carriers.json")
-    except FileNotFoundError:
-        print("  ⚠️ carriers.json not found, using fallback APNs")
-        # Fallback to hardcoded list
-        carriers_to_try = [
-            {"apn": "everywhere", "name": "EE Internet", "username": "eesecure", "password": "secure"},
-            {"apn": "internet", "name": "Generic Internet", "username": "", "password": ""},
-            {"apn": "web", "name": "Web APN", "username": "", "password": ""},
-            {"apn": "data", "name": "Data APN", "username": "", "password": ""},
-            {"apn": "three.co.uk", "name": "Three Internet", "username": "", "password": ""},
-            {"apn": "mobile.o2.co.uk", "name": "O2 Internet", "username": "o2web", "password": "password"},
-            {"apn": "giffgaff.com", "name": "giffgaff", "username": "giffgaff", "password": ""},
-        ]
-    
-    for carrier in carriers_to_try:
-        apn = carrier["apn"]
-        name = carrier["name"]
-        print(f"  📤 Trying APN: {apn} ({name})")
-        
-        # Configure PDP context with specific APN
-        send_at_command("AT+CGDCONT=1,\"IP\",\"" + apn + "\",\"0.0.0.0\",0,0", port)
-        time.sleep(1)
-        
-        # Activate PDP context
-        send_at_command("AT+CGACT=1,1", port)
-        time.sleep(3)
-        
-        # Check for IP
-        ip_response = send_at_command("AT+CGPADDR", port)
-        print(f"  📥 {ip_response}")
-        
-        # Check if we got a valid IP address (not 0.0.0.0)
-        if "+CGPADDR: 1," in ip_response:
-            # Extract the IP from the response
-            ip_line = [line for line in ip_response.split('\n') if '+CGPADDR: 1,' in line]
-            if ip_line and "0.0.0.0" not in ip_line[0]:
-                print(f"  ✅ Success with APN: {apn} ({name})")
-                return True
-    
-    print("  ❌ No working APN found")
-    return False
+# ensure at least one usable resolver
+RESOLV_OK=$(grep -E 'nameserver' /etc/resolv.conf 2>/dev/null | wc -l || echo 0)
+if [ "$RESOLV_OK" -lt 1 ]; then
+  echo "==> No resolvers found; setting temporary Cloudflare/Google DNS"
+  printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' >/etc/resolv.conf
+fi
 
-# ----------------- install steps -----------------
+# Optional: try to nudge systemd-resolved if available
+if ! curl -fsSL --max-time 5 https://deb.nodesource.com >/dev/null 2>&1; then
+  echo "==> DNS may be lagging; attempting resolvectl (best-effort)…"
+  resolvectl dns wlan0 1.1.1.1 9.9.9.9 8.8.8.8 2>/dev/null || true
+  resolvectl domain wlan0 ~. 2>/dev/null || true
+  resolvectl flush-caches 2>/dev/null || true
+  sleep 2
+fi
 
-def install_pm2():
-    print("  Installing Node.js + PM2…")
-    run_cmd("curl -fsSL https://deb.nodesource.com/setup_18.x | bash -", check=False)
-    run_cmd("apt install -y nodejs", check=False)
-    run_cmd("npm install -g pm2", check=False)
-    print("  ✅ PM2 ready")
+# ============================================================================
+# One-shot installer/runner for Raspberry-Pi-5-SIM7600E-H-4G-Proxy
+# ============================================================================
 
-# Squid installation is handled by run.sh
+# ---- guardrails -------------------------------------------------------------
+if [[ "$EUID" -ne 0 ]]; then
+  echo "Please run as root: sudo ./run.sh"
+  exit 1
+fi
 
-def install_dependencies():
-    print("🔧 Installing dependencies…")
-    pkgs = [
-        "python3","python3-pip","python3-yaml","python3-serial",
-        "python3-requests","iptables","python3-flask","curl","wget","unzip","build-essential"
-    ]
-    for p in pkgs:
-        print(f"  apt install -y {p}")
-        run_cmd(f"apt install -y {p}", check=False)
-    install_pm2()
-    # Squid is installed by run.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# ----------------- config -----------------
+# ---- apt & tools ------------------------------------------------------------
+echo "==> Installing base packages…"
+apt-get update -y
+DEBS=(
+  curl wget unzip build-essential iptables python3 python3-pip
+  python3-yaml python3-serial python3-requests python3-flask
+  ca-certificates gnupg modemmanager
+)
+apt-get install -y "${DEBS[@]}"
 
-def create_config():
-    print("📝 Creating/updating config.yaml")
-    lan_ip = detect_lan_ip()
-    
-    # Default configuration
-    default_cfg = {
-        "lan_bind_ip": lan_ip,
-        "api": {"bind": "127.0.0.1", "port": 8088, "token": generate_token()},
-        "proxy": {"auth_enabled": False, "user": "", "password": ""},
-        # Modem settings are auto-detected and configured by run.sh
-        "rotation": {
-            "ppp_teardown_wait": 60,  # Seconds to wait after killing old PPP connection (let carrier release old IP)
-            "ppp_restart_wait": 30,   # Seconds to wait after starting new PPP connection (for new IP assignment)
-            "max_attempts": 3         # Maximum rotation attempts before giving up
-        },
-        "pm2": {"enabled": True, "auto_restart": True, "ip_rotation_interval": 300, "max_restarts": 10, "restart_delay": 5000},
-        "discord": {"webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN"}
-    }
-    
-    # Load existing config if it exists
-    existing_cfg = {}
-    if os.path.exists("config.yaml"):
-        try:
-            with open("config.yaml", "r") as f:
-                existing_cfg = yaml.safe_load(f) or {}
-            print("  📄 Found existing config.yaml, merging with defaults")
-        except Exception as e:
-            print(f"  ⚠️ Error reading existing config: {e}")
-    
-    # Merge existing config with defaults (existing values take priority)
-    cfg = default_cfg.copy()
-    
-    # Smart merge: preserve user settings, reset carrier-specific settings
-    def smart_merge(existing, default):
-        """Merge config preserving user settings but resetting carrier-specific ones"""
-        result = default.copy()
-        
-        for key, value in existing.items():
-            if key == "modem":
-                # Remove modem section completely (handled by run.sh)
-                # Modem settings are auto-detected and configured
-                pass  # Don't preserve modem settings
-            elif isinstance(value, dict) and key in result and isinstance(result[key], dict):
-                # Recursively merge other nested dictionaries
-                result[key] = smart_merge(value, result[key])
-            else:
-                # Use existing value for all other settings (preserves user settings)
-                result[key] = value
-        return result
-    
-    cfg = smart_merge(existing_cfg, default_cfg)
-    
-    # Only update LAN IP if it's different (network may have changed)
-    if cfg.get("lan_bind_ip") != lan_ip:
-        cfg["lan_bind_ip"] = lan_ip
-        print(f"  🔄 Updated LAN IP: {lan_ip}")
-    
-    # Add missing sections with defaults
-    added_sections = []
-    for section, default_value in default_cfg.items():
-        if section not in existing_cfg:
-            cfg[section] = default_value
-            added_sections.append(section)
-    
-    if added_sections:
-        print(f"  ➕ Added missing sections: {', '.join(added_sections)}")
-    
-    # Log reset and preserved settings
-    reset_settings = []
-    preserved_settings = []
-    
-    for section, existing_value in existing_cfg.items():
-        if section == "modem":
-            # Modem section is removed (handled by run.sh)
-            reset_settings.append("modem.* (handled by run.sh)")
-        elif section in default_cfg and existing_value != default_cfg[section]:
-            if isinstance(existing_value, dict):
-                # Check for meaningful differences in nested dicts
-                for key, value in existing_value.items():
-                    if key in default_cfg[section] and value != default_cfg[section][key]:
-                        preserved_settings.append(f"{section}.{key}")
-            else:
-                preserved_settings.append(section)
-    
-    if reset_settings:
-        print(f"  🔄 Reset carrier-specific settings: {', '.join(reset_settings)}")
-    if preserved_settings:
-        print(f"  🔒 Preserved user settings: {', '.join(preserved_settings)}")
-    
-    # Write merged config
-    with open("config.yaml", "w") as f:
-        yaml.dump(cfg, f, default_flow_style=False)
-    
-    print(f"  ✅ LAN IP: {lan_ip}")
-    print(f"  ✅ API Token: {cfg['api']['token'][:20]}…")
-    print("  ✅ APN: Auto-detected from carriers.json by run.sh")
-    print("  ✅ Proxy auth: disabled (edit config.yaml later if you want auth)")
-    print("  ✅ Discord: not configured (edit config.yaml to add webhook URL)")
-    return cfg
+# ---- Node.js + PM2 (global) ------------------------------------------------
+if ! command -v node >/dev/null 2>&1; then
+  echo "==> Installing Node.js 18.x…"
+  curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+  apt-get install -y nodejs
+fi
 
-def create_squid_config(cfg):
-    print("🔧 Writing squid.conf")
-    lan_ip = cfg["lan_bind_ip"]
-    auth_enabled = cfg["proxy"]["auth_enabled"]
-    user = cfg["proxy"]["user"]
-    pw = cfg["proxy"]["password"]
+if ! command -v pm2 >/dev/null 2>&1; then
+  echo "==> Installing PM2 globally…"
+  npm install -g pm2
+fi
+echo "✅ PM2 ready"
 
-    if auth_enabled and user and pw:
-        proxy_cfg = f"""# Squid proxy with auth
-http_port {lan_ip}:3128
+# ---- Squid (reliable proxy) -------------------------------------------------
+if ! command -v squid >/dev/null 2>&1; then
+  echo "==> Installing Squid proxy…"
+  apt-get install -y squid
+fi
+echo "✅ Squid installed"
 
-# Authentication
-auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwd
-auth_param basic children 5
-auth_param basic realm Squid proxy-caching web server
-auth_param basic credentialsttl 2 hours
-auth_param basic casesensitive off
+# ---- Ensure helper scripts exist (idempotent) ------------------------------
+if [[ ! -f "${SCRIPT_DIR}/apn.txt" ]]; then
+  echo "==> Creating apn.txt with common APNs…"
+  cat > "${SCRIPT_DIR}/apn.txt" <<'EOF'
+# APN list (one per line)
+everywhere
+internet
+web
+data
+broadband
+mobile
+3gnet
+fast.t-mobile.com
+wap
+gprs
+mms
+hsdpa
+umts
+lte
+EOF
+fi
 
-# Access control
-acl authenticated proxy_auth REQUIRED
-http_access allow authenticated
-http_access deny all
+# Create/refresh run_squid.sh (runs squid as proxyuser)
+cat > "${SCRIPT_DIR}/run_squid.sh" <<'EOSH'
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CFG="${SCRIPT_DIR}/squid.conf"
+PROXY_USER="proxyuser"
+command -v squid >/dev/null || { echo "squid not found"; exit 1; }
+id -u "${PROXY_USER}" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "${PROXY_USER}"
+exec sudo -u "${PROXY_USER}" squid -N -f "${CFG}"
+EOSH
+chmod +x "${SCRIPT_DIR}/run_squid.sh"
 
-# Forward settings
-forwarded_for off
-request_header_access X-Forwarded-For deny all
-request_header_access Via deny all
+# ---- Allow REAL_USER to exec squid as proxyuser (NOPASSWD, minimal scope) --
+SUDOERS_FILE="/etc/sudoers.d/squid"
+if ! grep -q "^${REAL_USER} " "${SUDOERS_FILE}" 2>/dev/null; then
+  echo "==> Adding sudoers rule for ${REAL_USER} -> proxyuser (squid only)…"
+  echo "${REAL_USER} ALL=(proxyuser) NOPASSWD: /usr/sbin/squid" > "${SUDOERS_FILE}"
+  chmod 440 "${SUDOERS_FILE}"
+fi
 
-# Cache settings
-cache_dir ufs /var/spool/squid 100 16 256
-cache_mem 64 MB
+# ---- Generate config, ensure modem, write ecosystem, etc. -------------------
+echo "==> Running main.py to setup config and network…"
+python3 "${SCRIPT_DIR}/main.py" || true
 
-# Logging
-access_log /var/log/squid/access.log
-cache_log /var/log/squid/cache.log
+echo "==> Ensuring cellular interface is ready…"
+sleep 3
 
-# DNS
-dns_nameservers 8.8.8.8 8.8.4.4
-"""
-    else:
-        proxy_cfg = f"""# Squid proxy without auth
-http_port {lan_ip}:3128
+# Try to bring up a likely cellular iface
+if ip link show wwan0 >/dev/null 2>&1; then
+  ip link set wwan0 up || true
+  sleep 2
+fi
 
-# Allow all connections (no auth by default)
-http_access allow all
+# Discover a cellular-like interface for diagnostics
+CELL_IFACE=""
+for pattern in 'wwan' 'ppp' 'usb' 'eth1' 'eth2' 'eth3' 'enx' 'cdc'; do
+  CELL_IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -E "^${pattern}" | head -n1 || true)
+  [[ -n "${CELL_IFACE:-}" ]] || continue
+  if [[ "${CELL_IFACE}" == "eth0" || "${CELL_IFACE}" == "wlan0" ]]; then
+    CELL_IFACE=""
+    continue
+  fi
+  if ip link show "${CELL_IFACE}" | grep -qE "state (UP|UNKNOWN)"; then
+    echo "==> Found cellular interface: ${CELL_IFACE}"
+    break
+  fi
+  CELL_IFACE=""
+done
 
-# Forward settings
-forwarded_for off
-request_header_access X-Forwarded-For deny all
-request_header_access Via deny all
+if [[ -z "${CELL_IFACE:-}" ]]; then
+  echo "⚠️  No cellular interface found - proxy may use home network"
+else
+  echo "✅ Cellular interface ready: ${CELL_IFACE}"
+fi
 
-# Cache settings
-cache_dir ufs /var/spool/squid 100 16 256
-cache_mem 64 MB
+# ---- ENSURE PM2 is NOT running as root ------------------------------------
+echo "==> Ensuring root-PM2 is stopped and cleaned…"
+pm2 kill || true
+systemctl disable --now pm2-root 2>/dev/null || true
+rm -rf /root/.pm2
 
-# Logging
-access_log /var/log/squid/access.log
-cache_log /var/log/squid/cache.log
+# ---- Start PM2 as REAL_USER (and enable systemd autostart) -----------------
+echo "==> Starting PM2 as ${REAL_USER}…"
+sudo -u "${REAL_USER}" pm2 start "${SCRIPT_DIR}/ecosystem.config.js" || true
+sudo -u "${REAL_USER}" pm2 save || true
 
-# DNS
-dns_nameservers 8.8.8.8 8.8.4.4
-"""
-    with open("squid.conf","w") as f:
-        f.write(proxy_cfg)
-    
-    # Fix permissions for proxyuser
-    run_cmd("sudo chown proxyuser:proxyuser squid.conf", check=False)
-    run_cmd("sudo chmod 644 squid.conf", check=False)
-    
-    print("  ✅ squid.conf ready (HTTP:3128 on LAN IP)")
+START_CMD=$(sudo -u "${REAL_USER}" pm2 startup systemd -u "${REAL_USER}" --hp "${REAL_HOME}" | tail -n 1 | sed 's/^.*PM2.*: //')
+if [[ -z "${START_CMD}" ]]; then
+  START_CMD="sudo env PATH=$PATH pm2 startup systemd -u ${REAL_USER} --hp ${REAL_HOME} -y"
+fi
+eval "${START_CMD}" || true
 
-# ----------------- networking -----------------
+# ---- Wait for services to start and verify ---------------------------------
+echo "==> Waiting for services to start…"
+sleep 5
 
-def setup_network():
-    """Apply policy routing for proxy-only traffic via SIM."""
-    print("🌐 Setting policy routing (no default route changes)…")
-    
-    # Load config to get APN settings
-    try:
-        with open("config.yaml", "r") as f:
-            config = yaml.safe_load(f)
-        apn = config.get("modem", {}).get("apn", "everywhere")
-        print(f"  📡 Using APN: {apn}")
-    except:
-        apn = "everywhere"
-        print(f"  📡 Using default APN: {apn}")
-    
-    # First activate the modem
-    if not activate_modem():
-        print("  ⚠️ Modem activation failed, continuing anyway")
-    
-    # Then setup simple routing via ppp0
-    print("  🔄 Setting up simple routing via ppp0...")
-    run_cmd("sudo ip route add default dev ppp0 metric 200", check=False)
-    print("  ✅ Simple routing via ppp0 configured")
-    
-    # Start Squid proxy
-    print("  🚀 Starting Squid proxy...")
-    run_cmd("sudo systemctl start squid", check=False)
-    run_cmd("sudo systemctl enable squid", check=False)
-    print("  ✅ Squid proxy started")
-    
-    return True
+# Check Squid
+if ss -ltnp 2>/dev/null | grep -q ":3128"; then
+  echo "✅ Squid proxy is running on port 3128"
+else
+  echo "⚠️  Squid proxy not detected on port 3128, attempting restart..."
+  chmod +x "${SCRIPT_DIR}/run_squid.sh" 2>/dev/null || true
+  sudo -u "${REAL_USER}" pm2 restart all || true
+  sleep 3
+  if ss -ltnp 2>/dev/null | grep -q ":3128"; then
+    echo "✅ Squid proxy is now running on port 3128"
+  else
+    echo "⚠️  Squid proxy still not running, continuing..."
+  fi
+fi
 
-# ----------------- pm2 -----------------
+# Check API
+if ss -ltnp 2>/dev/null | grep -q ":8088"; then
+  echo "✅ API server is running on port 8088"
+else
+  echo "⚠️  API server not detected on port 8088"
+fi
 
-def create_pm2_ecosystem():
-    print("🔧 Creating PM2 ecosystem.config.js")
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Get the current user (who will run PM2) - same logic as run.sh
-    current_user = os.environ.get('SUDO_USER') or os.environ.get('USER') or 'pi'
-    print(f"  📝 PM2 will run as user: {current_user}")
-    
-    # Create state directory with proper permissions
-    state_dir = os.path.join(script_dir, "state")
-    os.makedirs(state_dir, exist_ok=True)
-    run_cmd(f"chown -R {current_user}:{current_user} {state_dir}", check=False)
-    run_cmd(f"chmod 755 {state_dir}", check=False)
-    print(f"  📁 Created state directory: {state_dir}")
-    
-    apps = [
-        {
-            "name": "4g-proxy-orchestrator",
-            "script": "orchestrator.py",
-            "interpreter": "python3",
-            "cwd": script_dir,
-            "autorestart": True,
-            "max_restarts": 10,
-            "restart_delay": 5000,
-            "env": {"PYTHONPATH": script_dir}
-        },
-        {
-            "name": "4g-proxy-web",
-            "script": "web_interface.py",
-            "interpreter": "python3",
-            "cwd": script_dir,
-            "autorestart": True,
-            "max_restarts": 10,
-            "restart_delay": 5000,
-            "env": {"PYTHONPATH": script_dir}
-        }
-    ]
-    with open("ecosystem.config.js","w") as f:
-        f.write("module.exports = {\n  apps: [\n")
-        for app in apps:
-            f.write("    {\n")
-            for k,v in app.items():
-                if isinstance(v,str):
-                    f.write(f'      {k}: "{v}",\n')
-                elif isinstance(v,bool):
-                    f.write(f'      {k}: {str(v).lower()},\n')
-                elif isinstance(v,int):
-                    f.write(f'      {k}: {v},\n')
-                elif isinstance(v,dict):
-                    f.write(f'      {k}: {{\n')
-                    for ek,ev in v.items():
-                        f.write(f'        {ek}: "{ev}"\n')
-                    f.write("      },\n")
-            f.write("    },\n")
-        f.write("  ]\n}\n")
-    print("  ✅ PM2 ecosystem written")
+# Wait for API readiness
+echo "==> Waiting for API (127.0.0.1:8088)…"
+for i in {1..12}; do
+  if curl -s --max-time 2 http://127.0.0.1:8088/status >/dev/null; then
+    echo "✅ API is up"
+    break
+  fi
+  sleep 1
+done
 
-def start_services():
-    print("🚀 Starting services with PM2…")
-    create_pm2_ecosystem()
-    run_cmd("pm2 start ecosystem.config.js", check=False)
-    time.sleep(2)
-    run_cmd("pm2 save", check=False)
-    run_cmd("pm2 startup", check=False)
-    print("  ✅ PM2 up (autostart on boot)")
+# Summary
+LAN_IP="$(ip -4 addr show wlan0 | awk '/inet /{print $2}' | cut -d/ -f1)"
+if [[ -z "${LAN_IP}" ]]; then
+  LAN_IP="$(ip -4 addr show eth0 | awk '/inet /{print $2}' | cut -d/ -f1)"
+fi
 
-# ----------------- test feedback -----------------
+DIRECT_IP="$(curl -s --max-time 5 https://api.ipify.org || echo 'Unknown')"
+PROXY_IP="Unknown"
+if [[ -n "${LAN_IP}" ]]; then
+  PROXY_IP="$(curl -s --max-time 8 -x "http://${LAN_IP}:3128" https://api.ipify.org || echo 'Unknown')"
+fi
 
-def test_and_print(cfg):
-    print("🧪 Quick tests…")
-    
-    # Get the actual LAN IP (not ppp0 IP)
-    try:
-        # Try to get WiFi IP first
-        result = run_cmd("ip -4 addr show wlan0 | awk '/inet /{print $2}' | cut -d/ -f1", check=False)
-        if result and result[0]:
-            lan_ip = result[0].strip()
-        else:
-            # Fallback to eth0
-            result = run_cmd("ip -4 addr show eth0 | awk '/inet /{print $2}' | cut -d/ -f1", check=False)
-            if result and result[0]:
-                lan_ip = result[0].strip()
-            else:
-                lan_ip = cfg["lan_bind_ip"]  # Use config as last resort
-    except:
-        lan_ip = cfg["lan_bind_ip"]
+if [[ "${PROXY_IP}" != "Unknown" && "${PROXY_IP}" != "${DIRECT_IP}" ]]; then
+  NETWORK_TYPE="Cellular (SIM card)"
+else
+  NETWORK_TYPE="Home network (fallback)"
+fi
 
-    # Proxy test
-    try:
-        r = requests.get("https://api.ipify.org",
-                         proxies={"http": f"http://{lan_ip}:3128"},
-                         timeout=10)
-        if r.status_code == 200:
-            print(f"  ✅ Proxy OK – IP: {r.text.strip()}")
-        else:
-            print("  ⚠️ Proxy test failed")
-    except Exception:
-        print("  ⚠️ Proxy test failed")
-    token = cfg["api"]["token"]
-    try:
-        cur = requests.get("https://ipv4.icanhazip.com", timeout=10)
-        current_ip = cur.text.strip() if cur.status_code == 200 else "Unknown"
-    except Exception:
-        current_ip = "Unknown"
-
-    interval_m = cfg["pm2"]["ip_rotation_interval"] // 60
-
-    print("\n" + "="*60)
-    print("🎉 SETUP COMPLETE!")
-    print("="*60)
-    print(f"📡 HTTP Proxy: {lan_ip}:3128")
-    print(f"🌐 Web Dashboard: http://{lan_ip}:5000")
-    print(f"📊 API Endpoint: http://127.0.0.1:8088")
-    print(f"🌐 Current Public IP: {current_ip}")
-    print("🧪 Test:")
-    print(f"  curl -x http://{lan_ip}:3128 https://api.ipify.org")
-    print("🔧 Squid: sudo systemctl status squid | sudo systemctl restart squid")
-    print("⚙️ Edit config.yaml for auth, then: sudo systemctl restart squid")
-    print("📱 Discord: Edit config.yaml webhook_url, then: python3 test_discord.py")
-    print("="*60)
-
-# ----------------- main -----------------
-
-if __name__ == "__main__":
-    print("🚀 Raspberry Pi 5 + SIM7600E-H 4G Proxy (safe policy-routing)")
-    if os.geteuid() != 0:
-        print("❌ Run as root: sudo python3 main.py")
-        sys.exit(1)
-    try:
-        install_dependencies()
-        cfg = create_config()
-        create_squid_config(cfg)
-        if not setup_network():
-            print("⚠️ Network setup failed; continuing so you can check logs")
-        start_services()
-        test_and_print(cfg)
-    except KeyboardInterrupt:
-        print("\n❌ Cancelled")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n❌ Setup failed: {e}")
-        sys.exit(1)
+echo
+echo "============================================================"
+echo "🎉 SETUP COMPLETE!"
+echo "============================================================"
+echo "📡 HTTP/HTTPS Proxy: ${LAN_IP:-<detected-LAN>}:3128"
+echo "🌐 Direct (no proxy) Public IP: ${DIRECT_IP}"
+echo "🌐 Proxy Public IP: ${PROXY_IP}"
+echo "📶 Network Type: ${NETWORK_TYPE}"
+echo ""
+echo "🔧 Management Commands:"
+echo "  pm2 status                    # View service status"
+echo "  pm2 logs                      # View all logs"
+echo "  pm2 restart 4g-proxy-squid    # Restart proxy"
+echo "  pm2 restart all               # Restart all services"
+echo ""
+echo "⚙️  Configuration:"
+echo "  Edit ${SCRIPT_DIR}/config.yaml for APN/auth settings"
+echo "  Then: pm2 restart 4g-proxy-squid"
+echo ""
+echo "🧪 Test Commands:"
+echo "  curl -s https://api.ipify.org && echo"
+echo "  curl -x http://${LAN_IP}:3128 -s https://api.ipify.org && echo"
+echo "============================================================"
