@@ -94,7 +94,7 @@ def get_current_ip():
         except:
             return "Unknown"
 
-def build_discord_embed(current_ip, previous_ip=None, is_rotation=False):
+def build_discord_embed(current_ip, previous_ip=None, is_rotation=False, is_failure=False, error_message=None):
     """Build Discord embed for IP notification with history."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     history = load_ip_history()
@@ -117,7 +117,12 @@ def build_discord_embed(current_ip, previous_ip=None, is_rotation=False):
         minutes = int((uptime.total_seconds() % 3600) // 60)
         uptime_text = f"\n**⏱️ Uptime:** {hours}h {minutes}m | **🔄 Total Rotations:** {history['rotations']}"
     
-    if is_rotation and previous_ip:
+    if is_failure:
+        title = "❌ IP Rotation Failed"
+        description = f"**Rotation Attempt Failed**\n\n**Current IP:** `{current_ip}`\n**Error:** {error_message or 'Unknown error'}{uptime_text}{history_text}"
+        color = 0xff0000  # Red for failure
+        footer = f"4G Mobile Proxy Server • {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    elif is_rotation and previous_ip:
         title = "🔄 4G Proxy IP Updated"
         description = f"**IP Rotation Complete**\n\n**Previous IP:** `{previous_ip}`\n**New IP:** `{current_ip}`{uptime_text}{history_text}"
         color = 0x00ff00  # Green for successful rotation
@@ -177,7 +182,7 @@ def post_or_patch_discord(webhook_url, payload, msg_id_file):
             save_text(msg_id_file, new_id)
         return ("posted", new_id)
 
-def send_discord_notification(current_ip, previous_ip=None, is_rotation=False):
+def send_discord_notification(current_ip, previous_ip=None, is_rotation=False, is_failure=False, error_message=None):
     """Send Discord notification about IP change."""
     config = load_config()
     webhook_url = config.get('discord', {}).get('webhook_url', '').strip()
@@ -185,11 +190,12 @@ def send_discord_notification(current_ip, previous_ip=None, is_rotation=False):
     if not webhook_url or webhook_url == "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN":
         return False
     
-    # Update IP history
-    history = update_ip_history(current_ip)
+    # Update IP history only for successful operations
+    if not is_failure:
+        history = update_ip_history(current_ip)
     
     try:
-        payload = build_discord_embed(current_ip, previous_ip, is_rotation)
+        payload = build_discord_embed(current_ip, previous_ip, is_rotation, is_failure, error_message)
         action, msg_id = post_or_patch_discord(webhook_url, payload, MSG_ID_PATH)
         print(f"Discord notification {action} (ID: {msg_id})")
         return True
@@ -232,18 +238,57 @@ def rotate():
     current_ip = get_current_ip()
     previous_ip = current_ip
     
-    # Perform rotation
-    at('AT+CGACT=0,1'); time.sleep(2)
-    at('AT+CGACT=1,1'); time.sleep(4)
+    try:
+        # Perform rotation
+        print("Starting IP rotation...")
+        at('AT+CGACT=0,1'); time.sleep(2)
+        at('AT+CGACT=1,1'); time.sleep(4)
+        
+        # Get new IP
+        pdp = at('AT+CGPADDR')
+        new_ip = get_current_ip()
+        
+        # Check if rotation was successful
+        if new_ip == previous_ip or new_ip == "Unknown":
+            # Rotation failed - IP didn't change
+            error_msg = "IP did not change after rotation attempt"
+            if new_ip == "Unknown":
+                error_msg = "Failed to get IP address after rotation"
+            
+            print(f"IP rotation failed: {error_msg}")
+            send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
+            
+            return jsonify({
+                'status': 'failed',
+                'error': error_msg,
+                'pdp': pdp,
+                'public_ip': new_ip,
+                'previous_ip': previous_ip
+            }), 400
+        else:
+            # Rotation successful
+            print(f"IP rotation successful: {previous_ip} -> {new_ip}")
+            send_discord_notification(new_ip, previous_ip, is_rotation=True)
+            
+            return jsonify({
+                'status': 'success',
+                'pdp': pdp,
+                'public_ip': new_ip,
+                'previous_ip': previous_ip
+            })
     
-    # Get new IP
-    pdp = at('AT+CGPADDR')
-    new_ip = get_current_ip()
-    
-    # Send Discord notification for IP rotation
-    send_discord_notification(new_ip, previous_ip, is_rotation=True)
-    
-    return jsonify({'pdp': pdp, 'public_ip': new_ip, 'previous_ip': previous_ip})
+    except Exception as e:
+        # Rotation failed with exception
+        error_msg = f"Rotation failed: {str(e)}"
+        print(f"IP rotation failed: {error_msg}")
+        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
+        
+        return jsonify({
+            'status': 'failed',
+            'error': error_msg,
+            'public_ip': current_ip,
+            'previous_ip': previous_ip
+        }), 500
 
 @app.post('/notify')
 def notify():
@@ -270,6 +315,21 @@ def history():
     history = load_ip_history()
     return jsonify(history)
 
+@app.post('/test-failure')
+def test_failure():
+    """Test failure notification (for debugging)."""
+    config = load_config()
+    expected = config['api']['token']
+    token = request.headers.get('Authorization', '')
+    if expected not in token:
+        abort(403)
+    
+    current_ip = get_current_ip()
+    error_msg = request.json.get('error', 'Test failure notification') if request.is_json else 'Test failure notification'
+    
+    send_discord_notification(current_ip, is_rotation=False, is_failure=True, error_message=error_msg)
+    return jsonify({'status': 'failure_notification_sent', 'ip': current_ip, 'error': error_msg})
+
 if __name__ == '__main__':
     # NOTE: networking is handled in main.py; do NOT try to change default route here.
     config = load_config()
@@ -293,6 +353,7 @@ if __name__ == '__main__':
     print("🔄 IP Rotation: POST http://127.0.0.1:8088/rotate")
     print("📢 Send Notification: POST http://127.0.0.1:8088/notify")
     print("📋 IP History: GET http://127.0.0.1:8088/history")
+    print("🧪 Test Failure: POST http://127.0.0.1:8088/test-failure")
     
     # Check Discord configuration
     webhook_url = config.get('discord', {}).get('webhook_url', '').strip()

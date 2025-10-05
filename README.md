@@ -101,6 +101,7 @@ discord:
 ### **Notification Types**
 - **🚀 Proxy Initialization** - When proxy starts up
 - **🔄 IP Rotation Complete** - When IP changes successfully  
+- **❌ IP Rotation Failed** - When rotation attempts fail
 - **📊 Status Update** - Manual status notifications
 
 ### **API Endpoints**
@@ -116,14 +117,21 @@ curl -X POST http://127.0.0.1:8088/rotate \
 # View IP rotation history
 curl -H "Authorization: Bearer YOUR_API_TOKEN" \
   http://127.0.0.1:8088/history
+
+# Test failure notification (for debugging)
+curl -X POST http://127.0.0.1:8088/test-failure \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"error": "Connection timeout"}'
 ```
 
 ### **Discord Notification Features**
 - **📋 IP History** - Shows last 5 IP addresses with timestamps
 - **⏱️ Uptime Tracking** - Displays total uptime since first connection
 - **🔄 Rotation Counter** - Counts total IP rotations
+- **❌ Error Handling** - Reports rotation failures with detailed error messages
 - **📱 Message Patching** - Updates same message (no spam)
-- **🎨 Color Coding** - Green (rotation), Blue (startup), Orange (status)
+- **🎨 Color Coding** - Green (success), Blue (startup), Orange (status), Red (failure)
 
 ## 🔧 Management Commands
 

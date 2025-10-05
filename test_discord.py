@@ -122,6 +122,7 @@ if __name__ == '__main__':
         print("  python3 test_discord.py        # Test notification")
         print("  curl -H 'Authorization: Bearer YOUR_TOKEN' http://127.0.0.1:8088/history")
         print("  curl -X POST -H 'Authorization: Bearer YOUR_TOKEN' http://127.0.0.1:8088/rotate")
+        print("  curl -X POST -H 'Authorization: Bearer YOUR_TOKEN' http://127.0.0.1:8088/test-failure")
     else:
         print("\n❌ Test failed!")
         print("Check the orchestrator logs: pm2 logs 4g-proxy-orchestrator")
