@@ -27,24 +27,29 @@ chown -R ${REAL_USER}:${REAL_USER} state 2>/dev/null || true
 chmod 755 state
 echo "✅ State directory created"
 
-# --- setup sudoers for PPP and routing commands ---
-echo "==> Setting up sudoers for PPP and routing..."
+# --- setup sudoers for PPP, routing, and modem control ---
+echo "==> Setting up sudoers for PPP, routing, and modem control..."
 
 # Find full paths for commands (they matter in sudoers)
 PKILL_PATH=$(which pkill || echo /usr/bin/pkill)
 PPPD_PATH=$(which pppd || echo /usr/sbin/pppd)
 IP_PATH=$(which ip || echo /usr/sbin/ip)
+SYSTEMCTL_PATH=$(which systemctl || echo /usr/bin/systemctl)
+MMCLI_PATH=$(which mmcli || echo /usr/bin/mmcli)
 
-echo "  📍 Command paths: pkill=$PKILL_PATH, pppd=$PPPD_PATH, ip=$IP_PATH"
+echo "  📍 Command paths: pkill=$PKILL_PATH, pppd=$PPPD_PATH, ip=$IP_PATH, systemctl=$SYSTEMCTL_PATH, mmcli=$MMCLI_PATH"
 
 # Create comprehensive sudoers rule with command aliases and !requiretty
 cat >/etc/sudoers.d/4g-proxy <<EOF
-# 4G Proxy sudoers rule for ${REAL_USER}
+# 4G Proxy sudoers for ${REAL_USER}
 Cmnd_Alias PROXY_CMDS = \\
   ${PKILL_PATH} pppd, \\
   ${PPPD_PATH} *, \\
-  ${IP_PATH} route del default, \\
-  ${IP_PATH} route add default dev ppp0 metric 200
+  ${IP_PATH} route replace default *, \\
+  ${IP_PATH} route add default dev ppp0 metric *, \\
+  ${MMCLI_PATH} *, \\
+  ${SYSTEMCTL_PATH} start ModemManager, \\
+  ${SYSTEMCTL_PATH} stop ModemManager
 
 ${REAL_USER} ALL=(root) NOPASSWD: PROXY_CMDS
 Defaults:${REAL_USER} !requiretty
