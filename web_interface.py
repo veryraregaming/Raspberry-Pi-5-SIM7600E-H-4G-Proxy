@@ -8,6 +8,8 @@ import os
 import json
 import requests
 import yaml
+import socket
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from flask import Flask, render_template_string, request, jsonify, redirect, url_for
@@ -36,6 +38,35 @@ def get_api_base_url():
     """Get API base URL"""
     config = load_config()
     return f"http://127.0.0.1:{config.get('api', {}).get('port', 8088)}"
+
+def detect_lan_ip():
+    """Detect the actual LAN IP that clients should use"""
+    # Try to get IP from network interfaces first
+    for iface in ("wlan0", "eth0"):
+        try:
+            result = subprocess.run(
+                ["ip", "-4", "addr", "show", iface], 
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if 'inet ' in line and '127.0.0.1' not in line:
+                        ip = line.split()[1].split('/')[0]
+                        # Skip link-local and private ranges we don't want
+                        if not ip.startswith('169.254.') and not ip.startswith('127.'):
+                            return ip
+        except:
+            continue
+    
+    # Fallback to socket method
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return "127.0.0.1"
 
 def api_request(endpoint, method='GET', data=None):
     """Make authenticated API request"""
@@ -516,7 +547,7 @@ def api_config():
         
         # Only return safe config values (no tokens or sensitive data)
         safe_config = {
-            'lan_ip': config.get('lan_bind_ip', 'Unknown'),
+            'lan_ip': detect_lan_ip(),  # Use detected LAN IP instead of config
             'api_port': config.get('api', {}).get('port', 8088),
             'current_apn': current_apn,
             'rotation': config.get('rotation', {}),
@@ -566,7 +597,6 @@ if __name__ == '__main__':
     print("🔧 Make sure the orchestrator API is running on port 8088")
     
     # Get LAN IP for display
-    config = load_config()
-    lan_ip = config.get('lan_bind_ip', 'localhost')
+    lan_ip = detect_lan_ip()
     
     app.run(host='0.0.0.0', port=5000, debug=False)
