@@ -368,6 +368,40 @@ def summary(cfg: dict):
     except Exception:
         direct_ip = "Unknown"
     lan_ip = cfg["lan_bind_ip"]
+    
+    # Detect IPv6 address
+    lan_ipv6 = "Unknown"
+    try:
+        result = subprocess.run(
+            ["ip", "-6", "addr", "show", "wlan0"], 
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                if 'global' in line and 'inet6' in line:
+                    ipv6 = line.split()[1].split('/')[0]
+                    if ipv6.startswith('2') or ipv6.startswith('2a'):  # Global unicast
+                        lan_ipv6 = ipv6
+                        break
+    except Exception:
+        pass
+    
+    # Fallback to eth0 if wlan0 fails
+    if lan_ipv6 == "Unknown":
+        try:
+            result = subprocess.run(
+                ["ip", "-6", "addr", "show", "eth0"], 
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if 'global' in line and 'inet6' in line:
+                        ipv6 = line.split()[1].split('/')[0]
+                        if ipv6.startswith('2') or ipv6.startswith('2a'):  # Global unicast
+                            lan_ipv6 = ipv6
+                            break
+        except Exception:
+            pass
     print("\n" + "=" * 60)
     print("🎉 SETUP COMPLETE (main.py)")
     print("=" * 60)
@@ -382,11 +416,17 @@ def summary(cfg: dict):
     print("")
     print("💡 Use these exact commands on your local machine:")
     print(f"  curl -x http://{lan_ip}:3128 -s https://api.ipify.org && echo    # IPv4 egress")
-    print(f"  curl -x http://[::1]:3128 -s https://api6.ipify.org && echo      # IPv6 egress")
+    if lan_ipv6 != "Unknown":
+        print(f"  curl -x http://[{lan_ipv6}]:3128 -s https://api6.ipify.org && echo  # IPv6 egress")
+    else:
+        print(f"  curl -x http://[::1]:3128 -s https://api6.ipify.org && echo      # IPv6 egress (localhost)")
     print("")
     print("📋 Proxy endpoints (different egress IPs):")
     print(f"  IPv4 Proxy: {lan_ip}:3128  → IPv4 egress IP")
-    print(f"  IPv6 Proxy: [::1]:3128     → IPv6 egress IP")
+    if lan_ipv6 != "Unknown":
+        print(f"  IPv6 Proxy: [{lan_ipv6}]:3128  → IPv6 egress IP")
+    else:
+        print(f"  IPv6 Proxy: [::1]:3128     → IPv6 egress IP (localhost)")
     print(f"  SOCKS Proxy: {lan_ip}:1080")
     print("=" * 60)
 
