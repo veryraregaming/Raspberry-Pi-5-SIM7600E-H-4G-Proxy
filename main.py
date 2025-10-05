@@ -475,6 +475,12 @@ def create_pm2_ecosystem():
     current_user = os.environ.get('SUDO_USER') or os.environ.get('USER') or 'pi'
     print(f"  📝 PM2 will run as user: {current_user}")
     
+    # Clean up old PM2 processes that shouldn't exist anymore
+    print("  🧹 Cleaning up old PM2 processes...")
+    run_cmd("pm2 delete 4g-proxy-squid 2>/dev/null || true", check=False)
+    run_cmd("pm2 delete 4g-proxy-3proxy 2>/dev/null || true", check=False)
+    run_cmd("pm2 delete 4g-proxy 2>/dev/null || true", check=False)
+    
     apps = [
         {
             "name": "4g-proxy-orchestrator",

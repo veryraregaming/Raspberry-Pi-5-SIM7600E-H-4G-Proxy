@@ -246,6 +246,11 @@ rm -rf /root/.pm2
 
 # ---- Start PM2 as REAL_USER (and enable systemd autostart) -----------------
 echo "==> Starting PM2 as ${REAL_USER}…"
+# Clean up old PM2 processes that shouldn't exist anymore
+echo "==> Cleaning up old PM2 processes..."
+sudo -u "${REAL_USER}" pm2 delete 4g-proxy-squid 2>/dev/null || true
+sudo -u "${REAL_USER}" pm2 delete 4g-proxy-3proxy 2>/dev/null || true
+sudo -u "${REAL_USER}" pm2 delete 4g-proxy 2>/dev/null || true
 sudo -u "${REAL_USER}" pm2 start "${SCRIPT_DIR}/ecosystem.config.js" || true
 sudo -u "${REAL_USER}" pm2 save || true
 
