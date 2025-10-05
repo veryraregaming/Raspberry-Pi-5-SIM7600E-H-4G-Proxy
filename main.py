@@ -348,7 +348,6 @@ def create_config():
         "api": {"bind": "127.0.0.1", "port": 8088, "token": generate_token()},
         "proxy": {"auth_enabled": False, "user": "", "password": ""},
         "modem": {
-            "apn": "everywhere",  # Default APN for EE (UK), can be overridden
             "port": "/dev/ttyUSB2",  # Default port, auto-detected
             "timeout": 2
         },
@@ -381,11 +380,11 @@ def create_config():
         
         for key, value in existing.items():
             if key == "modem":
-                # Always reset APN to default (carrier-specific)
-                # But preserve other modem settings like port/timeout if customized
+                # Remove APN from modem config (handled by carriers.json)
+                # Preserve other modem settings like port/timeout if customized
                 if isinstance(value, dict) and key in result:
                     result[key] = default[key].copy()
-                    # Only preserve non-APN settings if they've been customized
+                    # Preserve non-APN settings if they've been customized
                     for subkey, subvalue in value.items():
                         if subkey != "apn" and subkey in default[key]:
                             result[key][subkey] = subvalue
@@ -420,9 +419,8 @@ def create_config():
     
     for section, existing_value in existing_cfg.items():
         if section == "modem" and "apn" in existing_value:
-            # APN is always reset (carrier-specific)
-            if existing_value["apn"] != default_cfg["modem"]["apn"]:
-                reset_settings.append("modem.apn")
+            # APN is removed from config (handled by carriers.json)
+            reset_settings.append("modem.apn (moved to carriers.json)")
         elif section in default_cfg and existing_value != default_cfg[section]:
             if isinstance(existing_value, dict):
                 # Check for meaningful differences in nested dicts

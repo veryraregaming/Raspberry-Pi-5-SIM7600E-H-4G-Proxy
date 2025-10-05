@@ -381,7 +381,7 @@ HTML_TEMPLATE = """
                 document.getElementById('api-url').textContent = `127.0.0.1:${data.api_port || '8088'}`;
                 
                 // Update configuration display
-                document.getElementById('config-apn').textContent = data.modem?.apn || 'N/A';
+                document.getElementById('config-apn').textContent = 'Auto-detected from carriers.json';
                 
                 const rotation = data.rotation;
                 if (rotation) {

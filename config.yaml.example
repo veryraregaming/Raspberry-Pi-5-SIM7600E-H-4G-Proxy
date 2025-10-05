@@ -8,9 +8,9 @@ proxy:
   user: "your-proxy-username"  # only used if auth_enabled: true
   password: "your-proxy-password"  # only used if auth_enabled: true
 modem:
-  apn: "internet"             # APN for your carrier (common: internet, web, data, broadband)
   port: "/dev/ttyUSB2"        # Modem port (auto-detected)
   timeout: 2                  # AT command timeout in seconds
+  # APN is auto-detected from carriers.json - no need to configure here
 
 rotation:
   ppp_teardown_wait: 60       # Seconds to wait after killing old PPP connection (let carrier release old IP)
