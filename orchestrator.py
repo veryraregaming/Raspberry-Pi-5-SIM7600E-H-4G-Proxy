@@ -125,30 +125,52 @@ def deep_reset_modem(method: str, wait_seconds: int):
     if method == "mmcli":
         try:
             # systemctl enable/ensure running
+            print("MM: Starting ModemManager service...")
             subprocess.run([SUDO_PATH, "-n", SYSTEMCTL_PATH, "start", "ModemManager"], check=False, capture_output=True, text=True, timeout=10)
+            time.sleep(2)
+            
             # best-effort: assume modem index 0
+            print("MM: Disabling modem...")
             subprocess.run([SUDO_PATH, "-n", MMCLI_PATH, "-m", "0", "--disable"], check=False, capture_output=True, text=True, timeout=15)
+            time.sleep(2)
+            
             # wait long enough to fall out of NAT node
+            print(f"MM: Waiting {wait_seconds}s for CGNAT detach...")
             time.sleep(max(5, wait_seconds))
+            
+            print("MM: Enabling modem...")
             subprocess.run([SUDO_PATH, "-n", MMCLI_PATH, "-m", "0", "--enable"], check=False, capture_output=True, text=True, timeout=15)
+            time.sleep(3)
+            
             # stop to avoid port grabs when PPP starts
+            print("MM: Stopping ModemManager service...")
             subprocess.run([SUDO_PATH, "-n", SYSTEMCTL_PATH, "stop", "ModemManager"], check=False, capture_output=True, text=True, timeout=10)
-            print("Deep reset via ModemManager done.")
+            time.sleep(2)
+            
+            print("MM: Deep reset via ModemManager completed.")
         except Exception as e:
-            print(f"Deep reset (mmcli) failed: {e}")
+            print(f"MM: Deep reset (mmcli) failed: {e}")
     elif method == "at":
         try:
             p = detect_modem_port()
+            print(f"AT: Using port {p}")
+            
             # Optional clean detach
+            print("AT: Sending CGATT=0 (detach)...")
             at("AT+CGATT=0", port=p, read_delay=0.8, timeout=2)
             time.sleep(1.0)
+            
             # Full function reset
+            print("AT: Sending CFUN=1,1 (full function reset)...")
             at("AT+CFUN=1,1", port=p, read_delay=0.8, timeout=2)
+            
             # wait for module to re-enumerate and register
+            print(f"AT: Waiting {wait_seconds}s for module reset...")
             time.sleep(max(30, wait_seconds))
-            print("Deep reset via AT done.")
+            
+            print("AT: Deep reset via AT commands completed.")
         except Exception as e:
-            print(f"Deep reset (AT) failed: {e}")
+            print(f"AT: Deep reset (AT) failed: {e}")
     else:
         print("Deep reset skipped.")
 
