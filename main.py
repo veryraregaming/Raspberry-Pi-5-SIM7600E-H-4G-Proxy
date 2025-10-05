@@ -487,6 +487,16 @@ def create_pm2_ecosystem():
             "max_restarts": 10,
             "restart_delay": 5000,
             "env": {"PYTHONPATH": script_dir}
+        },
+        {
+            "name": "4g-proxy-web",
+            "script": "web_interface.py",
+            "interpreter": "python3",
+            "cwd": script_dir,
+            "autorestart": True,
+            "max_restarts": 10,
+            "restart_delay": 5000,
+            "env": {"PYTHONPATH": script_dir}
         }
     ]
     with open("ecosystem.config.js","w") as f:
@@ -563,6 +573,8 @@ def test_and_print(cfg):
     print("🎉 SETUP COMPLETE!")
     print("="*60)
     print(f"📡 HTTP Proxy: {lan_ip}:3128")
+    print(f"🌐 Web Dashboard: http://{lan_ip}:5000")
+    print(f"📊 API Endpoint: http://127.0.0.1:8088")
     print(f"🌐 Current Public IP: {current_ip}")
     print("🧪 Test:")
     print(f"  curl -x http://{lan_ip}:3128 https://api.ipify.org")

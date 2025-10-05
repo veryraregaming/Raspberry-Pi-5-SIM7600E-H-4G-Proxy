@@ -43,6 +43,8 @@ sudo ./run.sh
 
 **After setup, you'll see:**
 - 📡 HTTP Proxy: `192.168.1.37:3128`
+- 🌐 Web Dashboard: `http://192.168.1.37:5000`
+- 📊 API Endpoint: `http://127.0.0.1:8088`
 - 🌐 Current Public IP: `[SIM-card-IP]` (not your home network IP)
 - 🧪 Test command: `curl -x http://192.168.1.37:3128 https://api.ipify.org`
 
@@ -136,7 +138,41 @@ curl -X POST http://127.0.0.1:8088/test-failure \
 - **📱 Message Patching** - Updates same message (no spam)
 - **🎨 Color Coding** - Green (success), Blue (startup), Orange (status), Red (failure)
 
+## 🌐 Web Dashboard
+
+### **Access the Dashboard**
+Open your browser and go to: `http://YOUR_PI_IP:5000`
+
+### **Dashboard Features**
+- **📊 Real-time Status** - Current IP, connection status, uptime
+- **🔄 IP Rotation** - One-click IP rotation with success/failure feedback
+- **📋 IP History** - Visual history of all IP changes with timestamps
+- **📱 Discord Notifications** - Send manual notifications
+- **📈 Statistics** - Rotation count, uptime, last rotation time
+- **🎮 Controls** - Easy-to-use buttons for all operations
+- **🔄 Auto-refresh** - Updates every 30 seconds automatically
+
+### **Dashboard Screenshots**
+The dashboard provides a modern, responsive interface with:
+- Current proxy status and IP address
+- Visual IP rotation history
+- One-click controls for all operations
+- Real-time error reporting
+- Mobile-friendly design
+
 ## 🔧 Management Commands
+
+### **Web Interface**
+```bash
+# Access dashboard
+http://YOUR_PI_IP:5000
+
+# Check web interface status
+pm2 status 4g-proxy-web
+
+# View web interface logs
+pm2 logs 4g-proxy-web
+```
 
 ### **Squid Proxy**
 ```bash
