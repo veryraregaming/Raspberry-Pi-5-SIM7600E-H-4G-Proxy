@@ -45,24 +45,13 @@ sudo ./run.sh
 
 ## 🌐 Supported Networks
 
-### **UK Carriers:**
-- **EE** - `everywhere` APN
-- **O2** - `mobile.o2.co.uk` / `payandgo.o2.co.uk`
-- **Vodafone** - `internet` / `pp.vodafone.co.uk`
-- **Three UK** - `three.co.uk`
+### **Currently Supported:**
+- **UK Carriers**: EE, O2, Vodafone, Three UK
+- **UK MVNOs**: giffgaff, Tesco Mobile, ASDA Mobile, BT Mobile, 1pMobile, Sky Mobile, Lycamobile UK
+- **International SIMs**: Any SIM card that supports PPP dial-up (`ATD*99#`)
 
-### **UK MVNOs:**
-- **giffgaff** - `giffgaff.com`
-- **Tesco Mobile** - `prepay.tesco-mobile.com`
-- **ASDA Mobile** - `everywhere` (EE network)
-- **BT Mobile** - `everywhere` (EE network)
-- **1pMobile** - `data.uk`
-- **Sky Mobile** - `mobile.sky`
-- **Lycamobile UK** - `data.lycamobile.co.uk`
-
-### **International SIMs:**
-- Any SIM card that supports PPP dial-up (`ATD*99#`)
-- Most modern SIMs support this standard
+### **Adding New Carriers:**
+See [CARRIER_SETUP.md](CARRIER_SETUP.md) for detailed instructions on adding support for new carriers and networks worldwide.
 
 ## ⚙️ Configuration
 
