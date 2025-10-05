@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, time, requests, serial, yaml, json, subprocess, fcntl, errno
+import os, time, requests, serial, yaml, json, subprocess, threading
 from flask import Flask, request, jsonify, abort
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +17,6 @@ def which(name, default=None):
         pass
     return default or name
 
-# Absolute paths used with sudo -n (no password/tty)
 SUDO_PATH      = which("sudo", "/usr/bin/sudo")
 PKILL_PATH     = which("pkill", "/usr/bin/pkill")
 PPPD_PATH      = which("pppd", "/usr/sbin/pppd")
@@ -27,26 +26,23 @@ MMCLI_PATH     = which("mmcli", "/usr/bin/mmcli")
 
 # ========= State files =========
 
-BASE_DIR = Path(__file__).parent.resolve()
-STATE_DIR = BASE_DIR / "state"
+STATE_DIR = Path(__file__).parent / "state"
 STATE_DIR.mkdir(exist_ok=True)
 MSG_ID_PATH = STATE_DIR / "discord_message_id.txt"
 IP_HISTORY_PATH = STATE_DIR / "ip_history.json"
-LOCK_PATH = STATE_DIR / "rotate.lock"
 
 # ========= Config =========
 
 def load_config():
-    with open(BASE_DIR / 'config.yaml', 'r') as f:
-        return yaml.safe_load(f) or {}
+    with open('config.yaml', 'r') as f:
+        return yaml.safe_load(f)
 
 # ========= File helpers =========
 
 def load_text(file_path: Path):
     try:
         if file_path.exists():
-            txt = file_path.read_text(encoding="utf-8").strip()
-            return txt if txt else None
+            return file_path.read_text(encoding="utf-8").strip() or None
     except Exception:
         pass
     return None
@@ -112,13 +108,6 @@ def at(cmd, port=None, baud=115200, read_delay=0.5, timeout=1):
         return ""
 
 def deep_reset_modem(method: str, wait_seconds: int):
-    """
-    Deep detach to avoid CGNAT 'sticky IP':
-      - 'mmcli': enable service, disable modem, hold, enable, stop service
-      - 'at':    AT+CFUN=1,1 (reset RF) + optional CGATT detach
-    NOTE: If you enable 'mmcli' here, your sudoers must allow:
-      systemctl start/stop ModemManager, and mmcli -m 0 --disable/--enable
-    """
     method = (method or "").lower().strip()
     print(f"Deep reset method: {method or 'none'} (wait {wait_seconds}s)")
     if method == "mmcli":
@@ -130,15 +119,15 @@ def deep_reset_modem(method: str, wait_seconds: int):
 
             print("MM: Disabling modem...")
             subprocess.run([SUDO_PATH, "-n", MMCLI_PATH, "-m", "0", "--disable"],
-                           check=False, capture_output=True, text=True, timeout=20)
+                           check=False, capture_output=True, text=True, timeout=15)
             time.sleep(2)
 
             print(f"MM: Waiting {wait_seconds}s for CGNAT detach...")
-            time.sleep(max(5, int(wait_seconds)))
+            time.sleep(max(5, wait_seconds))
 
             print("MM: Enabling modem...")
             subprocess.run([SUDO_PATH, "-n", MMCLI_PATH, "-m", "0", "--enable"],
-                           check=False, capture_output=True, text=True, timeout=20)
+                           check=False, capture_output=True, text=True, timeout=15)
             time.sleep(3)
 
             print("MM: Stopping ModemManager service...")
@@ -153,28 +142,23 @@ def deep_reset_modem(method: str, wait_seconds: int):
         try:
             p = detect_modem_port()
             print(f"AT: Using port {p}")
-            print("AT: Sending CGATT=0 (detach)...")
+            print("AT: Sending CGATT=0 (detach)…")
             at("AT+CGATT=0", port=p, read_delay=0.8, timeout=2)
             time.sleep(1.0)
-            print("AT: Sending CFUN=1,1 (full function reset)...")
+            print("AT: Sending CFUN=1,1 (full function reset)…")
             at("AT+CFUN=1,1", port=p, read_delay=0.8, timeout=2)
-            print(f"AT: Waiting {wait_seconds}s for module reset/re-enumeration...")
-            time.sleep(max(30, int(wait_seconds)))
-            print("AT: Deep reset via AT commands completed.")
+            print(f"AT: Waiting {wait_seconds}s for module to re-enumerate…")
+            time.sleep(max(30, wait_seconds))
+            print("AT: Deep reset via AT completed.")
         except Exception as e:
-            print(f"AT: Deep reset (AT) failed: {e}")
+            print(f"AT: Deep reset failed: {e}")
     else:
         print("Deep reset skipped.")
 
 def ensure_ppp_default_route():
-    """
-    Keep existing default (wifi/eth) as primary; add ppp0 as secondary (higher metric).
-    """
     try:
         res = subprocess.run([IP_PATH, "route", "show", "default"], capture_output=True, text=True, timeout=5)
         line = res.stdout.splitlines()[0] if res.stdout else ""
-        if not line:
-            return
         parts = line.split()
         gw = dev = None
         metric = 100
@@ -203,17 +187,13 @@ def ensure_ppp_default_route():
 def get_current_ip():
     try:
         r = requests.get('https://ipv4.icanhazip.com', timeout=10)
-        if r.ok:
-            return r.text.strip()
+        return r.text.strip()
     except Exception:
-        pass
-    try:
-        r = requests.get('https://api.ipify.org', timeout=10)
-        if r.ok:
+        try:
+            r = requests.get('https://api.ipify.org', timeout=10)
             return r.text.strip()
-    except Exception:
-        pass
-    return "Unknown"
+        except Exception:
+            return "Unknown"
 
 # ========= Discord =========
 
@@ -290,7 +270,7 @@ def post_or_patch_discord(webhook_url, payload, msg_id_file):
 
 def send_discord_notification(current_ip, previous_ip=None, is_rotation=False, is_failure=False, error_message=None):
     config = load_config()
-    webhook_url = (config.get('discord', {}) or {}).get('webhook_url', '').strip()
+    webhook_url = config.get('discord', {}).get('webhook_url', '').strip()
     if not webhook_url or webhook_url == "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN":
         return False
     if not is_failure:
@@ -304,7 +284,7 @@ def send_discord_notification(current_ip, previous_ip=None, is_rotation=False, i
         print(f"Failed to send Discord notification: {e}")
         return False
 
-# ========= Helpers for PPP workflow =========
+# ========= PPP helpers =========
 
 def teardown_ppp(wait_s: int):
     subprocess.run([SUDO_PATH, "-n", PKILL_PATH, "pppd"], check=False)
@@ -320,42 +300,16 @@ def start_ppp():
 def wait_for_ppp_up(timeout_s: int) -> bool:
     deadline = time.time() + max(5, int(timeout_s))
     while time.time() < deadline:
-        r = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"], capture_output=True, text=True)
+        r = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"],
+                           capture_output=True, text=True)
         if r.returncode == 0 and "inet " in r.stdout:
             return True
         time.sleep(2)
     return False
 
-# ========= Simple inter-process lock to avoid overlapping rotates =========
-
-class RotateLock:
-    def __init__(self, path: Path):
-        self.path = path
-        self.fd = None
-    def __enter__(self):
-        self.fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
-        try:
-            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            os.write(self.fd, str(os.getpid()).encode())
-            os.fsync(self.fd)
-        except OSError as e:
-            if e.errno in (errno.EAGAIN, errno.EACCES):
-                raise RuntimeError("rotation already in progress")
-            raise
-        return self
-    def __exit__(self, exc_type, exc, tb):
-        try:
-            fcntl.flock(self.fd, fcntl.LOCK_UN)
-        finally:
-            os.close(self.fd)
-            try:
-                self.path.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-# ========= Global prev IP =========
-
-previous_ip = None
+# ========= Prevent concurrent rotates =========
+rotate_lock = threading.Lock()
+in_progress = False
 
 # ========= API =========
 
@@ -363,35 +317,30 @@ previous_ip = None
 def status():
     pdp = at('AT+CGPADDR')
     pub = get_current_ip()
-    up = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"], capture_output=True, text=True)
-    ppp_up = (up.returncode == 0 and "inet " in up.stdout)
-    return jsonify({'pdp': pdp, 'public_ip': pub, 'ppp_up': ppp_up})
+    up = False
+    try:
+        r = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"], capture_output=True, text=True)
+        up = (r.returncode == 0 and "inet " in r.stdout)
+    except Exception:
+        pass
+    return jsonify({'pdp': pdp, 'public_ip': pub, 'ppp_up': up})
 
 @app.post('/rotate')
 def rotate():
-    """
-    Conditional escalation:
-      1) Attempt 1: PPP restart -> if IP changes, done.
-      2) If unchanged/not up, attempt 2+: optional deep reset (mmcli/AT) → PPP → longer wait → route fix → check IP.
-    """
-    global previous_ip
-    config = load_config()
-    expected = (config.get('api') or {}).get('token', '')
-    token = request.headers.get('Authorization', '')
-    if not expected or expected not in token:
-        abort(403)
-
-    # prevent overlapping rotations
+    global in_progress
+    if not rotate_lock.acquire(blocking=False):
+        return jsonify({'status': 'busy', 'message': 'rotation already in progress'}), 429
+    in_progress = True
     try:
-        rl = RotateLock(LOCK_PATH)
-        rl.__enter__()
-    except RuntimeError as e:
-        return jsonify({'status': 'busy', 'error': str(e)}), 429
+        config = load_config()
+        expected = config['api']['token']
+        token = request.headers.get('Authorization', '')
+        if expected not in token:
+            abort(403)
 
-    current_ip = get_current_ip()
-    previous_ip = current_ip
+        current_ip = get_current_ip()
+        previous_ip = current_ip
 
-    try:
         print("Starting IP rotation...")
 
         rotation_config = config.get('rotation', {}) or {}
@@ -399,22 +348,18 @@ def rotate():
         restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
         max_attempts  = int(rotation_config.get('max_attempts', 2))
 
-        deep_enabled = bool(rotation_config.get('deep_reset_enabled', False))
-        deep_method  = str(rotation_config.get('deep_reset_method', 'mmcli')).lower()
-        # backward compat with older 'deep_reset' key
-        if 'deep_reset' in rotation_config:
-            old = str(rotation_config.get('deep_reset') or '').lower()
+        deep_enabled = rotation_config.get('deep_reset_enabled', False)
+        deep_method  = (rotation_config.get('deep_reset_method', 'mmcli') or 'mmcli').lower()
+        if 'deep_reset' in rotation_config:  # backward compat
+            old = (rotation_config.get('deep_reset', '') or '').lower()
             if old in ('mmcli', 'at'):
-                deep_enabled = True
-                deep_method = old
-            elif old in ('', 'off'):
+                deep_enabled, deep_method = True, old
+            elif old in ('off', ''):
                 deep_enabled = False
-
-        deep_wait    = int(rotation_config.get('deep_reset_wait', 180))
+        deep_wait = int(rotation_config.get('deep_reset_wait', 180))
 
         print(f"Rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, "
-              f"max_attempts={max_attempts}, deep_reset={'enabled' if deep_enabled else 'disabled'} "
-              f"({deep_method}, {deep_wait}s)")
+              f"max_attempts={max_attempts}, deep_reset={'enabled' if deep_enabled else 'disabled'} ({deep_method}, {deep_wait}s)")
 
         for attempt in range(max_attempts):
             print(f"\n--- Rotation Attempt {attempt + 1}/{max_attempts} ---")
@@ -424,50 +369,45 @@ def rotate():
                 print("Attempt 1: Simple PPP restart")
             else:
                 if deep_enabled:
-                    print(f"Attempt {attempt + 1}: Deep reset ({deep_method}) + PPP restart")
+                    print(f"Attempt {attempt + 1}: Deep reset ({deep_method}) before PPP")
                     deep_reset_modem(deep_method, deep_wait)
-                    # give ports time to re-enumerate
-                    print("Waiting up to 15s for modem ports to re-enumerate...")
+                    print("Waiting up to 15s for modem ports to re-enumerate…")
                     t0 = time.time()
                     while time.time() - t0 < 15:
                         if any(n.startswith("ttyUSB") for n in os.listdir("/dev")):
                             break
                         time.sleep(1)
                 else:
-                    print(f"Attempt {attempt + 1}: Deep reset disabled; doing PPP restart again")
+                    print(f"Attempt {attempt + 1}: Deep reset disabled; trying PPP restart again")
 
-            # start PPP
             try:
                 start_ppp()
             except Exception as e:
                 print(f"PPP restart failed on attempt {attempt + 1}: {e}")
                 if attempt == max_attempts - 1:
-                    error_msg = f"PPP restart failed after {max_attempts} attempts"
-                    print(f"IP rotation failed: {error_msg}")
-                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
-                    return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
-                else:
-                    continue
+                    err = f"PPP restart failed after {max_attempts} attempts"
+                    print(f"IP rotation failed: {err}")
+                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                    return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                continue
 
-            # wait for IP assignment (longer on deep attempts)
-            extra = max(30, restart_wait) if attempt > 0 else 0
+            extra = 0
+            if attempt > 0:
+                extra = max(30, restart_wait)
             total_wait = restart_wait + extra
             print(f"Waiting {total_wait} seconds for new IP assignment...")
             if not wait_for_ppp_up(total_wait):
                 print(f"ppp0 interface not up after attempt {attempt + 1}")
                 if attempt == max_attempts - 1:
-                    error_msg = "ppp0 interface not up after restart"
-                    print(f"IP rotation failed: {error_msg}")
-                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
-                    return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
-                else:
-                    continue
+                    err = "ppp0 interface not up after restart"
+                    print(f"IP rotation failed: {err}")
+                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                    return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                continue
 
-            # Fix routing (keep LAN primary, add PPP secondary)
             print("Fixing routing to prefer primary and keep PPP as secondary...")
             ensure_ppp_default_route()
 
-            # Check if we got a new IP
             new_ip = get_current_ip()
             pdp = at('AT+CGPADDR') if new_ip != "Unknown" else ""
 
@@ -484,37 +424,39 @@ def rotate():
             else:
                 print(f"IP unchanged on attempt {attempt + 1}: {new_ip} (was {previous_ip})")
                 if attempt < max_attempts - 1:
-                    print("Trying next attempt with escalation...")
+                    print("Trying next attempt with escalation…")
                     continue
-                else:
-                    error_msg = f"IP did not change after {max_attempts} attempts"
-                    print(f"IP rotation failed: {error_msg}")
-                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
-                    return jsonify({
-                        'status': 'failed',
-                        'error': error_msg,
-                        'pdp': pdp,
-                        'public_ip': new_ip,
-                        'previous_ip': previous_ip,
-                        'attempts': max_attempts
-                    }), 400
+                err = f"IP did not change after {max_attempts} attempts"
+                print(f"IP rotation failed: {err}")
+                send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                return jsonify({
+                    'status': 'failed',
+                    'error': err,
+                    'pdp': pdp,
+                    'public_ip': new_ip,
+                    'previous_ip': previous_ip,
+                    'attempts': max_attempts
+                }), 400
+
     except Exception as e:
-        error_msg = f"Rotation failed: {str(e)}"
-        print(f"IP rotation failed: {error_msg}")
-        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
-        return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
-    finally:
+        err = f"Rotation failed: {str(e)}"
+        print(f"IP rotation failed: {err}")
         try:
-            rl.__exit__(None, None, None)
+            current_ip = get_current_ip()
         except Exception:
-            pass
+            current_ip = "Unknown"
+        send_discord_notification(current_ip, None, is_rotation=False, is_failure=True, error_message=err)
+        return jsonify({'status':'failed','error':err}), 500
+    finally:
+        in_progress = False
+        rotate_lock.release()
 
 @app.post('/notify')
 def notify():
     config = load_config()
-    expected = (config.get('api') or {}).get('token', '')
+    expected = config['api']['token']
     token = request.headers.get('Authorization', '')
-    if not expected or expected not in token:
+    if expected not in token:
         abort(403)
     current_ip = get_current_ip()
     send_discord_notification(current_ip, is_rotation=False)
@@ -523,18 +465,18 @@ def notify():
 @app.get('/history')
 def history():
     config = load_config()
-    expected = (config.get('api') or {}).get('token', '')
+    expected = config['api']['token']
     token = request.headers.get('Authorization', '')
-    if not expected or expected not in token:
+    if expected not in token:
         abort(403)
     return jsonify(load_ip_history())
 
 @app.post('/test-failure')
 def test_failure():
     config = load_config()
-    expected = (config.get('api') or {}).get('token', '')
+    expected = config['api']['token']
     token = request.headers.get('Authorization', '')
-    if not expected or expected not in token:
+    if expected not in token:
         abort(403)
     current_ip = get_current_ip()
     error_msg = request.json.get('error', 'Test failure notification') if request.is_json else 'Test failure notification'
@@ -543,11 +485,10 @@ def test_failure():
 
 if __name__ == '__main__':
     config = load_config()
-    lan_ip = config.get('lan_bind_ip', '127.0.0.1')
-    proxy = config.get('proxy', {}) or {}
-    auth_enabled = bool(proxy.get('auth_enabled', False))
-    proxy_user = proxy.get('user') or ''
-    proxy_pass = proxy.get('password') or ''
+    lan_ip = config['lan_bind_ip']
+    auth_enabled = config['proxy']['auth_enabled']
+    proxy_user = config['proxy']['user']
+    proxy_pass = config['proxy']['password']
 
     print("\n" + "="*60)
     print("🚀 4G Proxy Orchestrator Started")
@@ -565,14 +506,13 @@ if __name__ == '__main__':
     print("📋 IP History: GET http://127.0.0.1:8088/history")
     print("🧪 Test Failure: POST http://127.0.0.1:8088/test-failure")
 
-    webhook_url = (config.get('discord', {}) or {}).get('webhook_url', '').strip()
+    webhook_url = config.get('discord', {}).get('webhook_url', '').strip()
     if webhook_url and webhook_url != "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN":
         print("📱 Discord notifications: Enabled")
         current_ip = get_current_ip()
-        send_discord_notification(current_ip, is_rotation=True)  # Initial startup
+        send_discord_notification(current_ip, is_rotation=True)
     else:
         print("📱 Discord notifications: Not configured")
     print("="*60)
 
-    app.run(host=(config.get('api') or {}).get('bind', '127.0.0.1'),
-            port=(config.get('api') or {}).get('port', 8088))
+    app.run(host=config['api']['bind'], port=config['api']['port'])
