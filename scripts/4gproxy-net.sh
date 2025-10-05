@@ -75,12 +75,13 @@ grep -qE "^[[:space:]]*${TABLE_ID}[[:space:]]+${TABLE_NAME}$" "${RT_TABLES}" 2>/
 
 # 5) default route in proxy_table via cellular iface (no change to main)
 if [[ "${CELL_IFACE}" == "ppp0" ]]; then
-  # For PPP, get the peer IP as gateway
-  PPP_GATEWAY=$(ip -4 route show dev ppp0 | awk '/default/ {print $3}' | head -n1)
-  if [[ -n "${PPP_GATEWAY}" ]]; then
+  # For PPP, get the peer IP as gateway from the interface info
+  PPP_GATEWAY=$(ip -4 addr show ppp0 | awk '/peer/ {print $4}' | cut -d/ -f1)
+  if [[ -n "${PPP_GATEWAY}" && "${PPP_GATEWAY}" != "link" ]]; then
     echo "[4gproxy-net] Using PPP gateway: ${PPP_GATEWAY}"
     ip route replace default via "${PPP_GATEWAY}" dev "${CELL_IFACE}" table "${TABLE_ID}"
   else
+    echo "[4gproxy-net] No valid PPP gateway found, using dev-only route"
     # Fallback to dev-only route
     ip route replace default dev "${CELL_IFACE}" table "${TABLE_ID}"
   fi
