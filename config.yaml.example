@@ -26,10 +26,14 @@ rotation:
   ppp_teardown_wait: 30
   
   # Deep reset settings - only used if simple rotation fails
-  # Set to "off" or "" to disable deep reset (faster but may not change IP)
-  # Set to "mmcli" to use ModemManager (recommended for most carriers)
-  # Set to "at" to use AT commands (fallback if mmcli doesn't work)
-  deep_reset: "off"  # Options: "mmcli", "at", "off" (or empty string)
+  # Set to true to enable deep reset (more reliable IP changes)
+  # Set to false for faster rotation (may not change IP due to CGNAT)
+  deep_reset_enabled: false
+  
+  # Deep reset method (only used if deep_reset_enabled is true)
+  # "mmcli" = ModemManager (recommended for most carriers)
+  # "at" = AT commands (fallback if mmcli doesn't work)
+  deep_reset_method: "mmcli"
   
   # How long to hold modem offline during deep reset (seconds)
   # Longer = better chance of new IP, but longer downtime

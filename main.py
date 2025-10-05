@@ -317,7 +317,8 @@ def write_config_yaml():
             "ppp_teardown_wait": 30,    # seconds to wait after killing PPP
             "ppp_restart_wait": 60,     # seconds to wait for new IP after PPP start
             "max_attempts": 2,          # try simple restart first, then escalate
-            "deep_reset": "off",        # "off"=fast, "mmcli"=reliable, "at"=fallback
+            "deep_reset_enabled": False, # true=enables deep reset, false=fast rotation only
+            "deep_reset_method": "mmcli", # "mmcli" or "at" (only used if enabled)
             "deep_reset_wait": 180      # seconds to hold modem offline for CGNAT escape
         },
         "pm2": {"enabled": True, "auto_restart": True, "ip_rotation_interval": 300, "max_restarts": 10, "restart_delay": 5000},

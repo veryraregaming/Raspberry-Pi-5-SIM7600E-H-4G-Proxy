@@ -368,11 +368,24 @@ def rotate():
         teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
         restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
         max_attempts  = int(rotation_config.get('max_attempts', 2))
-        deep_method   = (rotation_config.get('deep_reset', '') or '').lower()  # 'mmcli' | 'at' | 'off' | ''
-        deep_wait     = int(rotation_config.get('deep_reset_wait', 180))       # seconds to wait during deep reset
+        
+        # Handle both old and new config format for backward compatibility
+        deep_enabled = rotation_config.get('deep_reset_enabled', False)
+        deep_method = rotation_config.get('deep_reset_method', 'mmcli').lower()
+        
+        # Backward compatibility: check old 'deep_reset' field
+        if 'deep_reset' in rotation_config:
+            old_deep = (rotation_config.get('deep_reset', '') or '').lower()
+            if old_deep in ('mmcli', 'at'):
+                deep_enabled = True
+                deep_method = old_deep
+            elif old_deep in ('off', ''):
+                deep_enabled = False
+        
+        deep_wait = int(rotation_config.get('deep_reset_wait', 180))
 
         print(f"Rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, "
-              f"max_attempts={max_attempts}, deep_reset={deep_method or 'off'} ({deep_wait}s)")
+              f"max_attempts={max_attempts}, deep_reset={'enabled' if deep_enabled else 'disabled'} ({deep_method}, {deep_wait}s)")
 
         for attempt in range(max_attempts):
             print(f"\n--- Rotation Attempt {attempt + 1}/{max_attempts} ---")
@@ -394,20 +407,10 @@ def rotate():
                     else:
                         continue
              else:
-                 # Attempt 2+: Deep reset (if configured) then PPP
-                 chosen = None
-                 if deep_method in ("mmcli", "conditional"):
-                     chosen = "mmcli"
-                 elif deep_method == "at":
-                     chosen = "at"
-                 elif deep_method in ("off", ""):
-                     print(f"Attempt {attempt + 1}: Deep reset disabled; doing PPP restart again")
-                 else:
-                     print(f"Attempt {attempt + 1}: Unknown deep_reset setting '{deep_method}'; doing PPP restart again")
-
-                 if chosen:
-                     print(f"Attempt {attempt + 1}: Deep reset ({chosen}) + PPP restart")
-                     deep_reset_modem(chosen, deep_wait)
+                 # Attempt 2+: Deep reset (if enabled) then PPP
+                 if deep_enabled:
+                     print(f"Attempt {attempt + 1}: Deep reset ({deep_method}) + PPP restart")
+                     deep_reset_modem(deep_method, deep_wait)
 
                      # Give USB serial ports time to re-enumerate after enable
                      print("Waiting up to 15s for modem ports to re-enumerate...")
@@ -419,6 +422,8 @@ def rotate():
                          time.sleep(1)
                      else:
                          print("Warning: modem ports not visible yet; proceeding with PPP anyway.")
+                 else:
+                     print(f"Attempt {attempt + 1}: Deep reset disabled; doing PPP restart again")
 
                 try:
                     start_ppp()
