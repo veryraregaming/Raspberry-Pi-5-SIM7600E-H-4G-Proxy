@@ -17,3 +17,5 @@ pm2:
   ip_rotation_interval: 300   # IP rotation interval in seconds (300 = 5 minutes)
   max_restarts: 10            # Maximum restart attempts
   restart_delay: 5000         # Delay between restarts (ms)
+discord:
+  webhook_url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN"  # Discord webhook for IP notifications
