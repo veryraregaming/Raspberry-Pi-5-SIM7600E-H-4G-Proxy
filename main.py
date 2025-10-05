@@ -249,10 +249,11 @@ def keep_wifi_primary():
             
             if gw and dev and dev not in ["ppp0"]:
                 print(f"  🔄 Keeping {dev} as primary route (metric {metric})")
-                # Ensure WiFi stays primary
+                # Ensure WiFi stays primary - CRITICAL for SSH stability
                 run_cmd(f"sudo ip route replace default via {gw} dev {dev} metric {metric}", check=False)
-                # Add PPP as secondary with higher metric
-                run_cmd(f"sudo ip route replace default dev ppp0 metric {metric+300}", check=False)
+                # Add PPP as secondary with higher metric (lower priority)
+                run_cmd(f"sudo ip route add default dev ppp0 metric {metric+500}", check=False)
+                print(f"  ✅ WiFi ({dev}) remains primary for SSH access")
     except:
         pass
 
