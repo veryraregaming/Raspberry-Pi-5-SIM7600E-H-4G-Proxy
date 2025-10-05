@@ -256,6 +256,17 @@ HTML_TEMPLATE = """
                         <p><strong>Last Rotation:</strong> <span id="last-rotation">-</span></p>
                     </div>
                 </div>
+
+                <!-- Configuration -->
+                <div class="card">
+                    <h3>⚙️ Configuration</h3>
+                    <div id="configuration">
+                        <p><strong>APN:</strong> <span id="config-apn">Loading...</span></p>
+                        <p><strong>Rotation Timing:</strong> <span id="config-rotation">Loading...</span></p>
+                        <p><strong>Discord:</strong> <span id="config-discord">Loading...</span></p>
+                        <p><strong>Proxy Auth:</strong> <span id="config-auth">Loading...</span></p>
+                    </div>
+                </div>
                 
                 <!-- Controls -->
                 <div class="card">
@@ -356,11 +367,35 @@ HTML_TEMPLATE = """
         }
         
         async function loadConfig() {
-            const response = await fetch('/api/config');
-            const data = await response.json();
-            
-            document.getElementById('proxy-url').textContent = `${data.lan_ip}:3128`;
-            document.getElementById('api-url').textContent = `127.0.0.1:${data.api_port}`;
+            try {
+                const response = await fetch('/api/config');
+                const data = await response.json();
+                
+                if (data.error) {
+                    console.error('Config error:', data.error);
+                    return;
+                }
+
+                // Update proxy info
+                document.getElementById('proxy-url').textContent = `${data.lan_ip || 'Loading'}:3128`;
+                document.getElementById('api-url').textContent = `127.0.0.1:${data.api_port || '8088'}`;
+                
+                // Update configuration display
+                document.getElementById('config-apn').textContent = data.modem?.apn || 'N/A';
+                
+                const rotation = data.rotation;
+                if (rotation) {
+                    const rotationText = `${rotation.ppp_teardown_wait}s + ${rotation.ppp_restart_wait}s (${rotation.max_attempts} attempts)`;
+                    document.getElementById('config-rotation').textContent = rotationText;
+                } else {
+                    document.getElementById('config-rotation').textContent = 'N/A';
+                }
+
+                document.getElementById('config-discord').textContent = data.discord?.configured ? '✅ Configured' : '❌ Not configured';
+                document.getElementById('config-auth').textContent = data.proxy?.auth_enabled ? '🔒 Enabled' : '🔓 Disabled';
+            } catch (error) {
+                console.error('Error fetching config:', error);
+            }
         }
         
         async function rotateIP() {
@@ -449,6 +484,32 @@ def api_status():
         pass
     
     return jsonify({'public_ip': 'Unknown', 'error': 'API unavailable and direct IP check failed'}), 500
+
+@app.route('/api/config')
+def api_config():
+    """Get current configuration settings"""
+    try:
+        config = load_config()
+        
+        # Only return safe config values (no tokens or sensitive data)
+        safe_config = {
+            'lan_ip': config.get('lan_bind_ip', 'Unknown'),
+            'api_port': config.get('api', {}).get('port', 8088),
+            'rotation': config.get('rotation', {}),
+            'modem': config.get('modem', {}),
+            'proxy': {
+                'auth_enabled': config.get('proxy', {}).get('auth_enabled', False)
+            },
+            'pm2': config.get('pm2', {}),
+            'discord': {
+                'configured': bool(config.get('discord', {}).get('webhook_url', '').startswith('https://discord.com/api/webhooks/') and 
+                                 'YOUR_WEBHOOK_ID' not in config.get('discord', {}).get('webhook_url', ''))
+            }
+        }
+        
+        return jsonify(safe_config)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/history')
 def api_history():
