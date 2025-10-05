@@ -351,6 +351,11 @@ def create_config():
             "port": "/dev/ttyUSB2",  # Default port, auto-detected
             "timeout": 2
         },
+        "rotation": {
+            "ppp_teardown_wait": 15,  # Seconds to wait after killing PPP
+            "ppp_restart_wait": 60,   # Seconds to wait for new IP assignment
+            "max_attempts": 3         # Maximum rotation attempts before giving up
+        },
         "pm2": {"enabled": True, "auto_restart": True, "ip_rotation_interval": 300, "max_restarts": 10, "restart_delay": 5000},
         "discord": {"webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN"}
     }

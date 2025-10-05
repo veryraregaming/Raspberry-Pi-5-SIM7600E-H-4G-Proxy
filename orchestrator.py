@@ -242,9 +242,19 @@ def rotate():
         # Perform rotation using PPP restart (more reliable than AT commands)
         print("Starting IP rotation...")
         
+        # Load rotation configuration
+        config = load_config()
+        rotation_config = config.get('rotation', {})
+        teardown_wait = rotation_config.get('ppp_teardown_wait', 15)
+        restart_wait = rotation_config.get('ppp_restart_wait', 60)
+        max_attempts = rotation_config.get('max_attempts', 3)
+        
+        print(f"Rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, max_attempts={max_attempts}")
+        
         # Kill existing PPP connection
         subprocess.run(['sudo', 'pkill', 'pppd'], check=False)
-        time.sleep(3)
+        print(f"Waiting {teardown_wait} seconds for PPP teardown...")
+        time.sleep(teardown_wait)
         
         # Restart PPP
         result = subprocess.run(['sudo', 'pppd', 'call', 'ee'], 
@@ -261,8 +271,9 @@ def rotate():
                 'previous_ip': previous_ip
             }), 500
         
-        # Wait for connection to establish
-        time.sleep(8)
+        # Wait for new IP assignment
+        print(f"Waiting {restart_wait} seconds for new IP assignment...")
+        time.sleep(restart_wait)
         
         # Check if ppp0 is up
         try:
@@ -307,10 +318,35 @@ def rotate():
         
         # Check if rotation was successful
         if new_ip == previous_ip or new_ip == "Unknown":
-            # Rotation failed - IP didn't change
-            error_msg = "IP did not change after rotation attempt"
+            # Rotation failed - IP didn't change, try retry logic
+            print(f"IP rotation failed: {new_ip} (same as {previous_ip})")
+            
+            # Try additional attempts if configured
+            for attempt in range(1, max_attempts):
+                print(f"Retry attempt {attempt + 1}/{max_attempts}...")
+                
+                # Wait a bit longer and try again
+                additional_wait = restart_wait // 2  # Half the restart wait
+                print(f"Waiting additional {additional_wait} seconds...")
+                time.sleep(additional_wait)
+                
+                # Check IP again
+                new_ip = get_current_ip()
+                if new_ip != previous_ip and new_ip != "Unknown":
+                    print(f"IP rotation successful on retry {attempt + 1}: {previous_ip} -> {new_ip}")
+                    send_discord_notification(new_ip, previous_ip, is_rotation=True)
+                    return jsonify({
+                        'status': 'success',
+                        'pdp': pdp,
+                        'public_ip': new_ip,
+                        'previous_ip': previous_ip,
+                        'attempts': attempt + 1
+                    })
+            
+            # All attempts failed
+            error_msg = f"IP did not change after {max_attempts} rotation attempts"
             if new_ip == "Unknown":
-                error_msg = "Failed to get IP address after rotation"
+                error_msg = "Failed to get IP address after rotation attempts"
             
             print(f"IP rotation failed: {error_msg}")
             send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
@@ -320,10 +356,11 @@ def rotate():
                 'error': error_msg,
                 'pdp': pdp,
                 'public_ip': new_ip,
-                'previous_ip': previous_ip
+                'previous_ip': previous_ip,
+                'attempts': max_attempts
             }), 400
         else:
-            # Rotation successful
+            # Rotation successful on first attempt
             print(f"IP rotation successful: {previous_ip} -> {new_ip}")
             send_discord_notification(new_ip, previous_ip, is_rotation=True)
             
@@ -331,7 +368,8 @@ def rotate():
                 'status': 'success',
                 'pdp': pdp,
                 'public_ip': new_ip,
-                'previous_ip': previous_ip
+                'previous_ip': previous_ip,
+                'attempts': 1
             })
     
     except Exception as e:

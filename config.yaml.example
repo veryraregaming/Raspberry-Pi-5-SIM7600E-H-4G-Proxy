@@ -11,6 +11,11 @@ modem:
   apn: "internet"             # APN for your carrier (common: internet, web, data, broadband)
   port: "/dev/ttyUSB2"        # Modem port (auto-detected)
   timeout: 2                  # AT command timeout in seconds
+
+rotation:
+  ppp_teardown_wait: 15       # Seconds to wait after killing PPP
+  ppp_restart_wait: 60        # Seconds to wait for new IP assignment
+  max_attempts: 3             # Maximum rotation attempts before giving up
 pm2:
   enabled: true               # Enable PM2 process management
   auto_restart: true          # Auto-restart on crash
