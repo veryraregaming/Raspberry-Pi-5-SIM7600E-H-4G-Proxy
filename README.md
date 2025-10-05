@@ -430,6 +430,22 @@ pm2 logs
 - **PM2**: `pm2 logs 4g-proxy-orchestrator`
 - **System**: `sudo journalctl -f`
 
+### **Diagnostic Tool**
+
+Run the diagnostic script to troubleshoot issues:
+
+```bash
+python3 diagnose.py
+```
+
+This will check:
+- Configuration validity
+- Service status (PM2, Squid, orchestrator)
+- API connectivity
+- IP history
+- Network interfaces (ppp0, wwan0)
+- Current public IP
+
 ## 🛡️ Security Notes
 
 - **Never commit `config.yaml`** - it contains sensitive tokens

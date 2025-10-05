@@ -48,8 +48,15 @@ def api_request(endpoint, method='GET', data=None):
             response = requests.post(url, headers=headers, json=data, timeout=10)
         else:
             response = requests.get(url, headers=headers, timeout=10)
-        return response.json() if response.status_code == 200 else None
-    except:
+        
+        print(f"API Request: {method} {url} -> {response.status_code}")
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"API Error: {response.status_code} - {response.text}")
+            return None
+    except Exception as e:
+        print(f"API Request Failed: {e}")
         return None
 
 def load_ip_history():
@@ -429,7 +436,19 @@ def api_status():
     data = api_request('/status')
     if data:
         return jsonify(data)
-    return jsonify({'public_ip': 'Unknown', 'error': 'API unavailable'}), 500
+    
+    # Try to get IP directly if API fails
+    try:
+        import subprocess
+        result = subprocess.run(['curl', '-s', 'https://ipv4.icanhazip.com'], 
+                              capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            ip = result.stdout.strip()
+            return jsonify({'public_ip': ip, 'error': 'API unavailable, using direct IP check'})
+    except:
+        pass
+    
+    return jsonify({'public_ip': 'Unknown', 'error': 'API unavailable and direct IP check failed'}), 500
 
 @app.route('/api/history')
 def api_history():
