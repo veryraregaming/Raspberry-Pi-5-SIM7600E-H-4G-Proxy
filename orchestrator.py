@@ -184,16 +184,69 @@ def ensure_ppp_default_route():
     except Exception as e:
         print(f"Warning: Could not fix routing: {e}")
 
-def get_current_ip():
+def get_ip_versions():
+    """Fetch both IPv4 and IPv6 addresses."""
+    ipv4, ipv6 = None, None
     try:
-        r = requests.get('https://ipv4.icanhazip.com', timeout=10)
-        return r.text.strip()
-    except Exception:
-        try:
-            r = requests.get('https://api.ipify.org', timeout=10)
-            return r.text.strip()
-        except Exception:
-            return "Unknown"
+        ipv4 = requests.get("https://api.ipify.org", timeout=5).text.strip()
+    except Exception as e:
+        print(f"❌ Failed to fetch IPv4: {e}")
+    try:
+        ipv6 = requests.get("https://api6.ipify.org", timeout=5).text.strip()
+    except Exception as e:
+        print(f"❌ Failed to fetch IPv6: {e}")
+    return ipv4, ipv6
+
+def get_current_ip():
+    """Get IPv4 address (backward compatibility)."""
+    ipv4, _ = get_ip_versions()
+    return ipv4 or "Unknown"
+
+def log_ip_change(prev_ipv4, prev_ipv6):
+    """Log and notify about IP changes for both IPv4 and IPv6."""
+    new_ipv4, new_ipv6 = get_ip_versions()
+    
+    print("\n🌍 IP Rotation Results:")
+    ipv4_status = "🟢 changed" if new_ipv4 != prev_ipv4 else "⚪ same"
+    ipv6_status = "🟢 changed" if new_ipv6 != prev_ipv6 else "⚪ same"
+    
+    print(f"   IPv4: {new_ipv4} ({ipv4_status})")
+    print(f"   IPv6: {new_ipv6} ({ipv6_status})")
+
+    # Enhanced Discord notification with dual IP info
+    try:
+        config = load_config()
+        webhook_url = (config.get('discord', {}) or {}).get('webhook_url', '').strip()
+        if webhook_url and webhook_url != "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN":
+            embed = {
+                "title": "🔄 4G Proxy IP Rotation Complete",
+                "description": f"**Dual IP Rotation Results**",
+                "color": 0x00ff00,
+                "fields": [
+                    {
+                        "name": "🌐 IPv4 Address",
+                        "value": f"`{new_ipv4}` {ipv4_status}",
+                        "inline": True
+                    },
+                    {
+                        "name": "🧩 IPv6 Address", 
+                        "value": f"`{new_ipv6}` {ipv6_status}",
+                        "inline": True
+                    }
+                ],
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            payload = {"embeds": [embed]}
+            response = requests.post(webhook_url, json=payload, timeout=10)
+            if response.status_code == 200:
+                print("📱 Discord notification sent")
+            else:
+                print(f"⚠️ Discord notification failed: {response.status_code}")
+    except Exception as e:
+        print(f"⚠️ Discord notify failed: {e}")
+
+    return new_ipv4, new_ipv6
 
 # ========= Discord =========
 
@@ -316,14 +369,20 @@ in_progress = False
 @app.get('/status')
 def status():
     pdp = at('AT+CGPADDR')
-    pub = get_current_ip()
+    pub_ipv4, pub_ipv6 = get_ip_versions()
     up = False
     try:
         r = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"], capture_output=True, text=True)
         up = (r.returncode == 0 and "inet " in r.stdout)
     except Exception:
         pass
-    return jsonify({'pdp': pdp, 'public_ip': pub, 'ppp_up': up})
+    return jsonify({
+        'pdp': pdp, 
+        'public_ip': pub_ipv4,  # backward compatibility
+        'public_ipv4': pub_ipv4,
+        'public_ipv6': pub_ipv6,
+        'ppp_up': up
+    })
 
 @app.post('/rotate')
 def rotate():
@@ -338,10 +397,11 @@ def rotate():
         if expected not in token:
             abort(403)
 
-        current_ip = get_current_ip()
-        previous_ip = current_ip
-
-        print("Starting IP rotation...")
+        # Get initial IP versions before rotation
+        prev_ipv4, prev_ipv6 = get_ip_versions()
+        print(f"Starting IP rotation...")
+        print(f"Current IPv4: {prev_ipv4}")
+        print(f"Current IPv6: {prev_ipv6}")
 
         rotation_config = config.get('rotation', {}) or {}
         teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
@@ -408,33 +468,55 @@ def rotate():
             print("Fixing routing to prefer primary and keep PPP as secondary...")
             ensure_ppp_default_route()
 
-            new_ip = get_current_ip()
+            # Check IP changes using dual IP tracking
+            new_ipv4, new_ipv6 = log_ip_change(prev_ipv4, prev_ipv6)
+            new_ip = new_ipv4 or "Unknown"
             pdp = at('AT+CGPADDR') if new_ip != "Unknown" else ""
 
-            if new_ip != previous_ip and new_ip != "Unknown":
-                print(f"✅ IP rotation successful on attempt {attempt + 1}: {previous_ip} -> {new_ip}")
-                send_discord_notification(new_ip, previous_ip, is_rotation=True)
+            # Check if either IPv4 or IPv6 changed
+            ipv4_changed = new_ipv4 != prev_ipv4
+            ipv6_changed = new_ipv6 != prev_ipv6
+            any_change = ipv4_changed or ipv6_changed
+
+            if any_change and new_ip != "Unknown":
+                # Success! At least one IP changed
+                change_details = []
+                if ipv4_changed:
+                    change_details.append(f"IPv4: {prev_ipv4} -> {new_ipv4}")
+                if ipv6_changed:
+                    change_details.append(f"IPv6: {prev_ipv6} -> {new_ipv6}")
+                
+                print(f"✅ IP rotation successful on attempt {attempt + 1}: {', '.join(change_details)}")
+                
                 return jsonify({
                     'status': 'success',
                     'pdp': pdp,
                     'public_ip': new_ip,
-                    'previous_ip': previous_ip,
+                    'public_ipv4': new_ipv4,
+                    'public_ipv6': new_ipv6,
+                    'previous_ipv4': prev_ipv4,
+                    'previous_ipv6': prev_ipv6,
+                    'ipv4_changed': ipv4_changed,
+                    'ipv6_changed': ipv6_changed,
                     'attempts': attempt + 1
                 })
             else:
-                print(f"IP unchanged on attempt {attempt + 1}: {new_ip} (was {previous_ip})")
+                print(f"No IP changes on attempt {attempt + 1}: IPv4={new_ipv4}, IPv6={new_ipv6}")
                 if attempt < max_attempts - 1:
                     print("Trying next attempt with escalation…")
                     continue
-                err = f"IP did not change after {max_attempts} attempts"
+                err = f"No IP changes after {max_attempts} attempts"
                 print(f"IP rotation failed: {err}")
-                send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                send_discord_notification(new_ip, prev_ipv4, is_rotation=False, is_failure=True, error_message=err)
                 return jsonify({
                     'status': 'failed',
                     'error': err,
                     'pdp': pdp,
                     'public_ip': new_ip,
-                    'previous_ip': previous_ip,
+                    'public_ipv4': new_ipv4,
+                    'public_ipv6': new_ipv6,
+                    'previous_ipv4': prev_ipv4,
+                    'previous_ipv6': prev_ipv6,
                     'attempts': max_attempts
                 }), 400
 
