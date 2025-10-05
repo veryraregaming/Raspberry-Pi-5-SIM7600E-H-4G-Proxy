@@ -428,6 +428,17 @@ def summary(cfg: dict):
     else:
         print(f"  IPv6 Proxy: [::1]:3128     → IPv6 egress IP (localhost)")
     print(f"  SOCKS Proxy: {lan_ip}:1080")
+    print("")
+    print("🌐 Use from other machines on your network:")
+    print(f"  HTTP Proxy: {lan_ip}:3128")
+    print(f"  SOCKS Proxy: {lan_ip}:1080")
+    if lan_ipv6 != "Unknown":
+        print(f"  IPv6 HTTP Proxy: [{lan_ipv6}]:3128")
+    print("")
+    print("💻 Example usage in applications:")
+    print(f"  curl -x http://{lan_ip}:3128 https://api.ipify.org")
+    print(f"  export http_proxy=http://{lan_ip}:3128")
+    print(f"  export https_proxy=http://{lan_ip}:3128")
     print("=" * 60)
 
 def main():
