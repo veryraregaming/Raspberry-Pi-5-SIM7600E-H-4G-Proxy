@@ -489,8 +489,7 @@ def create_pm2_ecosystem():
             "cwd": script_dir,
             "autorestart": True,
             "max_restarts": 10,
-            "restart_delay": 5000,
-            "user": "proxyuser"
+            "restart_delay": 5000
         }
     ]
     with open("ecosystem.config.js","w") as f:
