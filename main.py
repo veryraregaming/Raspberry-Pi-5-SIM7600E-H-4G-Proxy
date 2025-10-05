@@ -452,7 +452,7 @@ def setup_network():
         print("  ⚠️ Modem activation failed, continuing anyway")
     
     # Then setup network routing
-    out, err = run_cmd("bash ./4gproxy-net.sh", check=False)
+    out, err = run_cmd("bash ./scripts/4gproxy-net.sh", check=False)
     if out: print(out)
     if err and "ERROR" in err:
         print(err)

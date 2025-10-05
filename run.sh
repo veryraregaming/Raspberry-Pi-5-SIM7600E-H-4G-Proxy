@@ -169,58 +169,8 @@ EOF
   chmod +x "${SCRIPT_DIR}/run_squid.sh"
 fi
 
-# 4gproxy-net.sh — safe policy routing (no default route change)
-cat > "${SCRIPT_DIR}/4gproxy-net.sh" <<'EOSH'
-#!/usr/bin/env bash
-set -euo pipefail
-echo "[4gproxy-net] starting…"
-echo "[4gproxy-net] Available interfaces:"
-ip -o link show | awk -F': ' '{print $2}' | grep -v lo
-
-# Try multiple patterns for cellular interfaces (EXCLUDING eth0/wlan0)
-CELL_IFACE=""
-for pattern in 'wwan' 'ppp' 'usb' 'eth1' 'eth2' 'eth3' 'enx' 'cdc'; do
-  CELL_IFACE=$(ip -o link show | awk -F': ' '{print $2}' | grep -E "^${pattern}" | head -n1 || true)
-  if [[ -n "${CELL_IFACE:-}" ]]; then
-    # CRITICAL: Never use eth0 or wlan0 (home network interfaces)
-    if [[ "${CELL_IFACE}" == "eth0" || "${CELL_IFACE}" == "wlan0" ]]; then
-      echo "[4gproxy-net] Skipping ${CELL_IFACE} (home network interface)"
-      CELL_IFACE=""
-      continue
-    fi
-    # For direct modem mode, we might not have an IP on the interface
-    # Check if interface exists and is up
-    if ip link show "${CELL_IFACE}" | grep -q "state UP\|state UNKNOWN"; then
-      echo "[4gproxy-net] Found cellular interface: ${CELL_IFACE} (pattern: ${pattern})"
-      break
-    else
-      echo "[4gproxy-net] Found interface ${CELL_IFACE} but not up, trying next..."
-      CELL_IFACE=""
-    fi
-  fi
-done
-
-if [[ -z "${CELL_IFACE:-}" ]]; then
-  echo "[4gproxy-net] ERROR: no active cellular interface found."
-  echo "[4gproxy-net] Tried patterns: wwan, ppp, usb, eth1, eth2, eth3, enx, cdc"
-  echo "[4gproxy-net] Available interfaces with IPs:"
-  ip -o addr show | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d: -f1
-  exit 1
-fi
-echo "[4gproxy-net] Using cellular interface: ${CELL_IFACE}"
-PROXY_USER="proxyuser"
-id -u "$PROXY_USER" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "$PROXY_USER" || true
-sysctl -w net.ipv4.ip_forward=1 >/dev/null
-TABLE_ID=100; TABLE_NAME="proxy_table"; RT_TABLES="/etc/iproute2/rt_tables"
-grep -qE "^[[:space:]]*${TABLE_ID}[[:space:]]+${TABLE_NAME}$" "$RT_TABLES" 2>/dev/null || echo "${TABLE_ID} ${TABLE_NAME}" >> "$RT_TABLES"
-ip route replace default dev "${CELL_IFACE}" table "${TABLE_ID}"
-ip rule add fwmark 0x1 table "${TABLE_ID}" pref 100 2>/dev/null || true
-iptables -t mangle -D OUTPUT -m owner --uid-owner "${PROXY_USER}" -j MARK --set-mark 1 2>/dev/null || true
-iptables -t mangle -A OUTPUT -m owner --uid-owner "${PROXY_USER}" -j MARK --set-mark 1
-iptables -t nat -C POSTROUTING -o "${CELL_IFACE}" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o "${CELL_IFACE}" -j MASQUERADE
-echo "[4gproxy-net] fwmark 0x1 -> table ${TABLE_ID} via ${CELL_IFACE} active"
-EOSH
-chmod +x "${SCRIPT_DIR}/4gproxy-net.sh"
+# Use the updated 4gproxy-net.sh script from scripts/ directory
+# (The script is already in the repo with the latest fixes)
 
 # run_squid.sh — run squid as proxyuser (for owner match)
 cat > "${SCRIPT_DIR}/run_squid.sh" <<'EOSH'
@@ -249,7 +199,7 @@ echo "==> Running main.py to setup config and network…"
 # main.py will:
 #  - auto-detect LAN IP, write config.yaml & squid.conf (no auth by default)
 #  - activate SIM7600E-H modem with direct AT commands
-#  - call ./4gproxy-net.sh (policy routing)
+#  - call ./scripts/4gproxy-net.sh (policy routing)
 #  - write ecosystem.config.js
 python3 "${SCRIPT_DIR}/main.py" || true
 
