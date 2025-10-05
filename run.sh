@@ -167,6 +167,22 @@ systemctl enable --now squid || true
 echo "==> Restarting Squid to apply new configuration..."
 systemctl restart squid || true
 
+# Test proxy after Squid restart
+echo "==> Testing proxy after configuration..."
+LAN_IP="$(ip -4 addr show wlan0 | awk '/inet /{print $2}' | cut -d/ -f1)"
+if [[ -z "${LAN_IP}" ]]; then
+  LAN_IP="$(ip -4 addr show eth0 | awk '/inet /{print $2}' | cut -d/ -f1)"
+fi
+
+if [[ -n "${LAN_IP}" ]]; then
+  PROXY_TEST_IP="$(curl -s --max-time 10 -x "http://${LAN_IP}:3128" https://api.ipify.org 2>/dev/null || echo 'Failed')"
+  if [[ "${PROXY_TEST_IP}" != "Failed" ]]; then
+    echo "✅ Proxy test successful - IP via proxy: ${PROXY_TEST_IP}"
+  else
+    echo "⚠️ Proxy test failed - check Squid configuration"
+  fi
+fi
+
 # ensure ModemManager is not holding ports for PPP (main.py stops it, but keep idempotent)
 systemctl stop ModemManager || true
 

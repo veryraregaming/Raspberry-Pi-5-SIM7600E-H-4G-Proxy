@@ -546,17 +546,21 @@ def main():
     if mode == "rndis":
         print(f"  ✅ Cellular connection via RNDIS: {iface} ({cellular_ip})")
         write_squid_conf(cfg, cellular_ip)
-        # Reload Squid to pick up new config
-        run_cmd([SYSTEMCTL_PATH, "reload", "squid"], check=False)
+        print("  🔄 Squid will be restarted by run.sh to apply new configuration")
     elif mode == "ppp":
         print(f"  ✅ Cellular connection via PPP: {iface}")
         write_squid_conf(cfg)
         keep_primary_and_add_ppp_secondary()
+        # Restart Squid for PPP mode
+        run_cmd([SYSTEMCTL_PATH, "restart", "squid"], check=False)
+        proxy_test(cfg["lan_bind_ip"])
     else:
         print("  ⚠️ No cellular connection established; using LAN only")
         write_squid_conf(cfg)
+        # Restart Squid for LAN-only mode
+        run_cmd([SYSTEMCTL_PATH, "restart", "squid"], check=False)
+        proxy_test(cfg["lan_bind_ip"])
 
-    proxy_test(cfg["lan_bind_ip"])
     summary(cfg)
     return 0
 
