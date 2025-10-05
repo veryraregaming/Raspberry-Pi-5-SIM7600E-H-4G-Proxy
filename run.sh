@@ -118,32 +118,33 @@ python3 "${SCRIPT_DIR}/main.py" || true
 # (main.py stops it already, but we keep it idempotent here)
 systemctl stop ModemManager || true
 
-# -------- make sure PM2 is not running as root and is clean ----------
+# ---- make sure PM2 is NOT running as root --------------------------------
 echo "==> Cleaning any root PM2 instance…"
 pm2 kill || true
 systemctl disable --now pm2-root 2>/dev/null || true
 rm -rf /root/.pm2 || true
 
-# -------- start orchestrator with PM2 as REAL_USER -------------------
+# ---- start orchestrator with PM2 as REAL_USER -----------------------------
 echo "==> Starting PM2 apps as ${REAL_USER}…"
 
-# Ensure ecosystem.config.js exists
-if [[ ! -f "${SCRIPT_DIR}/ecosystem.config.js" ]]; then
-  echo "⚠️ ecosystem.config.js not found, creating it..."
-  python3 "${SCRIPT_DIR}/main.py" --ecosystem-only || true
-fi
+# wipe the user's stale process list/dump to avoid pm_id ghost refs
+sudo -u "${REAL_USER}" pm2 delete all || true
+sudo -u "${REAL_USER}" pm2 kill || true
+rm -f "${REAL_HOME}/.pm2/dump.pm2"
 
-# Start PM2 apps fresh (don't try to restart non-existent processes)
-sudo -u "${REAL_USER}" pm2 delete all 2>/dev/null || true
-sudo -u "${REAL_USER}" pm2 start "${SCRIPT_DIR}/ecosystem.config.js" || true
+# start only the orchestrator app from ecosystem
+sudo -u "${REAL_USER}" pm2 start "${SCRIPT_DIR}/ecosystem.config.js" --only 4g-proxy-orchestrator
+
+# save and enable at boot
 sudo -u "${REAL_USER}" pm2 save || true
-
-# Enable PM2 at boot for REAL_USER
 START_CMD=$(sudo -u "${REAL_USER}" pm2 startup systemd -u "${REAL_USER}" --hp "${REAL_HOME}" | tail -n 1 | sed 's/^.*PM2.*: //')
 if [[ -z "${START_CMD}" ]]; then
   START_CMD="sudo env PATH=$PATH pm2 startup systemd -u ${REAL_USER} --hp ${REAL_HOME} -y"
 fi
 eval "${START_CMD}" || true
+
+# brief status
+sudo -u "${REAL_USER}" pm2 ls || true
 
 # -------- health checks ----------------------------------------------
 echo "==> Waiting for API (127.0.0.1:8088)…"
