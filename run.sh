@@ -29,11 +29,28 @@ echo "✅ State directory created"
 
 # --- setup sudoers for PPP and routing commands ---
 echo "==> Setting up sudoers for PPP and routing..."
-# Create sudoers rule for the user who will run PM2 processes
-echo "${REAL_USER} ALL=(ALL) NOPASSWD: /usr/sbin/pppd, /usr/bin/pkill, /sbin/ip route add, /sbin/ip route del" | sudo tee /etc/sudoers.d/pppd >/dev/null
-# Also add rule for root (in case PM2 runs as root)
-echo "root ALL=(ALL) NOPASSWD: /usr/sbin/pppd, /usr/bin/pkill, /sbin/ip route add, /sbin/ip route del" | sudo tee -a /etc/sudoers.d/pppd >/dev/null
-sudo chmod 0440 /etc/sudoers.d/pppd
+
+# Find full paths for commands (they matter in sudoers)
+PKILL_PATH=$(which pkill)
+PPPD_PATH=$(which pppd)
+IP_PATH=$(which ip)
+
+echo "  📍 Command paths: pkill=$PKILL_PATH, pppd=$PPPD_PATH, ip=$IP_PATH"
+
+# Create comprehensive sudoers rule with command aliases and !requiretty
+sudo tee /etc/sudoers.d/4g-proxy >/dev/null <<EOF
+# 4G Proxy sudoers rule for ${REAL_USER}
+Cmnd_Alias PROXY_CMDS = \\
+  ${PKILL_PATH} pppd, \\
+  ${PPPD_PATH} *, \\
+  ${IP_PATH} route del default, \\
+  ${IP_PATH} route add default dev ppp0 metric 200
+
+${REAL_USER} ALL=(root) NOPASSWD: PROXY_CMDS
+Defaults:${REAL_USER} !requiretty
+EOF
+
+sudo chmod 0440 /etc/sudoers.d/4g-proxy
 sudo visudo -c >/dev/null 2>&1 && echo "✅ Sudoers configured" || echo "⚠️  Sudoers validation failed"
 
 # --- ensure networking/DNS available before anything else ---

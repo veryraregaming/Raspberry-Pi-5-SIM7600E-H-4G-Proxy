@@ -216,6 +216,17 @@ def at(cmd):
         time.sleep(0.5)
         return ser.read_all().decode(errors='ignore')
 
+def ensure_ppp_default_route():
+    """Ensure traffic goes through ppp0 with proper sudoers permissions."""
+    try:
+        # Best-effort delete any existing default route
+        subprocess.run(["sudo", "ip", "route", "del", "default"], check=False, timeout=5, capture_output=True, text=True)
+        # Add default via ppp0 with lower priority than Wi-Fi/Eth if they reappear
+        subprocess.run(["sudo", "ip", "route", "add", "default", "dev", "ppp0", "metric", "200"], check=True, timeout=5, capture_output=True, text=True)
+        print("Routing fixed - traffic will go through ppp0")
+    except Exception as e:
+        print(f"Warning: Could not fix routing: {e}")
+
 # Store previous IP for change detection
 previous_ip = None
 
@@ -302,17 +313,7 @@ def rotate():
         
         # CRITICAL: Fix routing to ensure traffic goes through ppp0, not WiFi
         print("Fixing routing to use ppp0...")
-        try:
-            # Get the current user (who has sudoers permissions)
-            current_user = os.environ.get('SUDO_USER') or os.environ.get('USER') or 'pi'
-            # Remove any existing default route (WiFi might have taken over)
-            subprocess.run(['sudo', '-u', current_user, 'sudo', 'ip', 'route', 'del', 'default'], check=False)
-            # Add default route through ppp0 with higher metric (lower priority than WiFi)
-            subprocess.run(['sudo', '-u', current_user, 'sudo', 'ip', 'route', 'add', 'default', 'dev', 'ppp0', 'metric', '200'], check=True)
-            print("Routing fixed - traffic will go through ppp0")
-        except Exception as e:
-            print(f"Warning: Could not fix routing: {e}")
-            # Continue anyway, as PPP might still work
+        ensure_ppp_default_route()
         
         # Get new IP
         new_ip = get_current_ip()
