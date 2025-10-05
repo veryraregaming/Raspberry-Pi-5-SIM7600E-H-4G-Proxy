@@ -138,6 +138,10 @@ rm -f "${REAL_HOME}/.pm2/dump.pm2"
 # ensure ecosystem.config.js exists before pm2 start
 [[ -f "${SCRIPT_DIR}/ecosystem.config.js" ]] || python3 "${SCRIPT_DIR}/main.py" --ecosystem-only
 
+# brief wait to ensure all services are stable before starting PM2
+echo "==> Waiting for services to stabilize..."
+sleep 3
+
 # start all apps from ecosystem (orchestrator + web interface)
 sudo -u "${REAL_USER}" pm2 start "${SCRIPT_DIR}/ecosystem.config.js"
 
@@ -152,15 +156,26 @@ eval "${START_CMD}" || true
 # brief status
 sudo -u "${REAL_USER}" pm2 ls || true
 
-# -------- health checks ----------------------------------------------
-echo "==> Waiting for API (127.0.0.1:8088)…"
-for i in {1..20}; do
-  if curl -s --max-time 2 http://127.0.0.1:8088/status >/dev/null; then
-    echo "✅ API is up"
+# verify orchestrator is actually responding
+echo "==> Verifying orchestrator API..."
+for i in {1..10}; do
+  if curl -s --max-time 2 http://127.0.0.1:8088/status >/dev/null 2>&1; then
+    echo "✅ Orchestrator API responding"
     break
+  fi
+  if [ $i -eq 10 ]; then
+    echo "⚠️ Orchestrator API not responding - may need manual restart"
   fi
   sleep 1
 done
+
+# -------- final health check ----------------------------------------------
+echo "==> Final API health check..."
+if curl -s --max-time 5 http://127.0.0.1:8088/status >/dev/null; then
+  echo "✅ API is healthy"
+else
+  echo "⚠️ API health check failed"
+fi
 
 LAN_IP="$(ip -4 addr show wlan0 | awk '/inet /{print $2}' | cut -d/ -f1)"
 if [[ -z "${LAN_IP}" ]]; then
