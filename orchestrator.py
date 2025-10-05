@@ -6,10 +6,11 @@ from pathlib import Path
 
 app = Flask(__name__)
 
-# State file for Discord message ID
+# State files for Discord message ID and IP history
 STATE_DIR = Path(__file__).parent / "state"
 STATE_DIR.mkdir(exist_ok=True)
 MSG_ID_PATH = STATE_DIR / "discord_message_id.txt"
+IP_HISTORY_PATH = STATE_DIR / "ip_history.json"
 
 def load_config():
     with open('config.yaml', 'r') as f:
@@ -34,6 +35,53 @@ def save_text(file_path, content):
     except Exception as e:
         print(f"Warning: Could not save to {file_path}: {e}")
 
+def load_ip_history():
+    """Load IP history from JSON file."""
+    try:
+        if IP_HISTORY_PATH.exists():
+            with open(IP_HISTORY_PATH, 'r') as f:
+                return json.load(f)
+    except:
+        pass
+    return {"ips": [], "rotations": 0, "first_seen": None}
+
+def save_ip_history(history):
+    """Save IP history to JSON file."""
+    try:
+        with open(IP_HISTORY_PATH, 'w') as f:
+            json.dump(history, f, indent=2)
+    except Exception as e:
+        print(f"Warning: Could not save IP history: {e}")
+
+def update_ip_history(current_ip):
+    """Update IP history with current IP."""
+    history = load_ip_history()
+    now = datetime.now().isoformat()
+    
+    # Check if this is a new IP
+    if not history["ips"] or history["ips"][-1]["ip"] != current_ip:
+        # Add new IP entry
+        history["ips"].append({
+            "ip": current_ip,
+            "timestamp": now,
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "date": datetime.now().strftime("%d/%m/%Y")
+        })
+        
+        # Increment rotation count if not the first IP
+        if history["first_seen"] is None:
+            history["first_seen"] = now
+        elif len(history["ips"]) > 1:
+            history["rotations"] += 1
+        
+        # Keep only last 10 IPs to avoid huge messages
+        if len(history["ips"]) > 10:
+            history["ips"] = history["ips"][-10:]
+        
+        save_ip_history(history)
+    
+    return history
+
 def get_current_ip():
     """Get current public IP address."""
     try:
@@ -47,22 +95,41 @@ def get_current_ip():
             return "Unknown"
 
 def build_discord_embed(current_ip, previous_ip=None, is_rotation=False):
-    """Build Discord embed for IP notification."""
+    """Build Discord embed for IP notification with history."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    history = load_ip_history()
+    
+    # Build IP history section
+    history_text = ""
+    if history["ips"]:
+        history_text = "\n\n**📋 Recent IP History:**\n"
+        # Show last 5 IPs
+        recent_ips = history["ips"][-5:]
+        for ip_entry in recent_ips:
+            history_text += f"• `{ip_entry['ip']}` - {ip_entry['time']} {ip_entry['date']}\n"
+    
+    # Calculate uptime and rotation stats
+    uptime_text = ""
+    if history["first_seen"]:
+        first_seen = datetime.fromisoformat(history["first_seen"])
+        uptime = datetime.now() - first_seen
+        hours = int(uptime.total_seconds() // 3600)
+        minutes = int((uptime.total_seconds() % 3600) // 60)
+        uptime_text = f"\n**⏱️ Uptime:** {hours}h {minutes}m | **🔄 Total Rotations:** {history['rotations']}"
     
     if is_rotation and previous_ip:
         title = "🔄 4G Proxy IP Updated"
-        description = f"**IP Rotation Complete**\n\n**Previous IP:** {previous_ip}\n**New IP:** {current_ip}"
+        description = f"**IP Rotation Complete**\n\n**Previous IP:** `{previous_ip}`\n**New IP:** `{current_ip}`{uptime_text}{history_text}"
         color = 0x00ff00  # Green for successful rotation
         footer = f"4G Mobile Proxy Server • {datetime.now().strftime('%d/%m/%Y %H:%M')}"
     elif is_rotation:
         title = "🚀 4G Proxy Initialized"
-        description = f"**Proxy Started**\n\n**Current IP:** {current_ip}\n**Status:** Ready for connections"
+        description = f"**Proxy Started**\n\n**Current IP:** `{current_ip}`\n**Status:** Ready for connections{uptime_text}{history_text}"
         color = 0x0099ff  # Blue for initialization
         footer = f"4G Mobile Proxy Server • {datetime.now().strftime('%d/%m/%Y %H:%M')}"
     else:
         title = "📊 4G Proxy Status Update"
-        description = f"**Current IP:** {current_ip}\n**Status:** Monitoring active"
+        description = f"**Current IP:** `{current_ip}`\n**Status:** Monitoring active{uptime_text}{history_text}"
         color = 0xff9900  # Orange for status update
         footer = f"4G Mobile Proxy Server • {datetime.now().strftime('%d/%m/%Y %H:%M')}"
     
@@ -117,6 +184,9 @@ def send_discord_notification(current_ip, previous_ip=None, is_rotation=False):
     
     if not webhook_url or webhook_url == "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN":
         return False
+    
+    # Update IP history
+    history = update_ip_history(current_ip)
     
     try:
         payload = build_discord_embed(current_ip, previous_ip, is_rotation)
@@ -188,6 +258,18 @@ def notify():
     send_discord_notification(current_ip, is_rotation=False)
     return jsonify({'status': 'notification_sent', 'ip': current_ip})
 
+@app.get('/history')
+def history():
+    """Get IP rotation history."""
+    config = load_config()
+    expected = config['api']['token']
+    token = request.headers.get('Authorization', '')
+    if expected not in token:
+        abort(403)
+    
+    history = load_ip_history()
+    return jsonify(history)
+
 if __name__ == '__main__':
     # NOTE: networking is handled in main.py; do NOT try to change default route here.
     config = load_config()
@@ -210,6 +292,7 @@ if __name__ == '__main__':
     print("📊 API Status: http://127.0.0.1:8088/status")
     print("🔄 IP Rotation: POST http://127.0.0.1:8088/rotate")
     print("📢 Send Notification: POST http://127.0.0.1:8088/notify")
+    print("📋 IP History: GET http://127.0.0.1:8088/history")
     
     # Check Discord configuration
     webhook_url = config.get('discord', {}).get('webhook_url', '').strip()

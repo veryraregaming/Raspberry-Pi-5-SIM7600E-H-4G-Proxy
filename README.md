@@ -112,7 +112,18 @@ curl -X POST http://127.0.0.1:8088/notify \
 # Rotate IP and notify
 curl -X POST http://127.0.0.1:8088/rotate \
   -H "Authorization: Bearer YOUR_API_TOKEN"
+
+# View IP rotation history
+curl -H "Authorization: Bearer YOUR_API_TOKEN" \
+  http://127.0.0.1:8088/history
 ```
+
+### **Discord Notification Features**
+- **📋 IP History** - Shows last 5 IP addresses with timestamps
+- **⏱️ Uptime Tracking** - Displays total uptime since first connection
+- **🔄 Rotation Counter** - Counts total IP rotations
+- **📱 Message Patching** - Updates same message (no spam)
+- **🎨 Color Coding** - Green (rotation), Blue (startup), Orange (status)
 
 ## 🔧 Management Commands
 
