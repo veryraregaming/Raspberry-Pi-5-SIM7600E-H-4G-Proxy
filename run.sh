@@ -29,7 +29,10 @@ echo "✅ State directory created"
 
 # --- setup sudoers for PPP and routing commands ---
 echo "==> Setting up sudoers for PPP and routing..."
+# Create sudoers rule for the user who will run PM2 processes
 echo "${REAL_USER} ALL=(ALL) NOPASSWD: /usr/sbin/pppd, /usr/bin/pkill, /sbin/ip route add, /sbin/ip route del" | sudo tee /etc/sudoers.d/pppd >/dev/null
+# Also add rule for root (in case PM2 runs as root)
+echo "root ALL=(ALL) NOPASSWD: /usr/sbin/pppd, /usr/bin/pkill, /sbin/ip route add, /sbin/ip route del" | sudo tee -a /etc/sudoers.d/pppd >/dev/null
 sudo chmod 0440 /etc/sudoers.d/pppd
 sudo visudo -c >/dev/null 2>&1 && echo "✅ Sudoers configured" || echo "⚠️  Sudoers validation failed"
 
