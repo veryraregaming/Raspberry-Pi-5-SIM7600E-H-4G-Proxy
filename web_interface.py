@@ -402,20 +402,34 @@ HTML_TEMPLATE = """
             const button = event.target;
             button.disabled = true;
             button.textContent = '🔄 Rotating...';
+            showAlert('IP rotation started... This may take up to 90 seconds.', 'info');
             
             try {
-                const response = await fetch('/api/rotate', { method: 'POST' });
+                // Use a longer timeout for rotation (90 seconds + buffer)
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 95000);
+                
+                const response = await fetch('/api/rotate', { 
+                    method: 'POST',
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
                 const data = await response.json();
                 
                 if (data.status === 'success') {
                     showAlert('IP rotation successful!', 'success');
                 } else {
-                    showAlert('IP rotation failed: ' + data.error, 'error');
+                    showAlert('IP rotation failed: ' + (data.error || 'Unknown error'), 'error');
                 }
                 
                 await loadData(); // Refresh all data
             } catch (error) {
-                showAlert('Error during rotation: ' + error.message, 'error');
+                if (error.name === 'AbortError') {
+                    showAlert('IP rotation timed out. Check logs for status.', 'error');
+                } else {
+                    showAlert('Error during rotation: ' + error.message, 'error');
+                }
             } finally {
                 button.disabled = false;
                 button.textContent = '🔄 Rotate IP';
