@@ -520,21 +520,27 @@ def start_services():
 
 def test_and_print(cfg):
     print("🧪 Quick tests…")
-    # API
+    
+    # Get the actual LAN IP (not ppp0 IP)
     try:
-        r = requests.get("http://127.0.0.1:8088/status", timeout=5)
-        if r.status_code == 200:
-            data = r.json()
-            print(f"  ✅ API OK – Public IP: {data.get('public_ip','Unknown')}")
+        # Try to get WiFi IP first
+        result = run_cmd("ip -4 addr show wlan0 | awk '/inet /{print $2}' | cut -d/ -f1", check=False)
+        if result and result[0]:
+            lan_ip = result[0].strip()
         else:
-            print("  ⚠️ API not responding")
-    except Exception:
-        print("  ⚠️ API test failed")
+            # Fallback to eth0
+            result = run_cmd("ip -4 addr show eth0 | awk '/inet /{print $2}' | cut -d/ -f1", check=False)
+            if result and result[0]:
+                lan_ip = result[0].strip()
+            else:
+                lan_ip = cfg["lan_bind_ip"]  # Use config as last resort
+    except:
+        lan_ip = cfg["lan_bind_ip"]
 
-    # Proxy
+    # Proxy test
     try:
         r = requests.get("https://api.ipify.org",
-                         proxies={"http": "http://127.0.0.1:8080"},
+                         proxies={"http": f"http://{lan_ip}:3128"},
                          timeout=10)
         if r.status_code == 200:
             print(f"  ✅ Proxy OK – IP: {r.text.strip()}")
@@ -542,8 +548,6 @@ def test_and_print(cfg):
             print("  ⚠️ Proxy test failed")
     except Exception:
         print("  ⚠️ Proxy test failed")
-
-    lan_ip = cfg["lan_bind_ip"]
     token = cfg["api"]["token"]
     try:
         cur = requests.get("https://ipv4.icanhazip.com", timeout=10)
