@@ -470,6 +470,11 @@ def setup_network():
 def create_pm2_ecosystem():
     print("🔧 Creating PM2 ecosystem.config.js")
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Get the current user (who will run PM2) - same logic as run.sh
+    current_user = os.environ.get('SUDO_USER') or os.environ.get('USER') or 'pi'
+    print(f"  📝 PM2 will run as user: {current_user}")
+    
     apps = [
         {
             "name": "4g-proxy-orchestrator",
