@@ -290,21 +290,35 @@ def send_discord_notification(current_ip, previous_ip=None, is_rotation=False, i
 def detect_rndis_interface():
     """Detect RNDIS interface (enx*) that provides cellular connectivity."""
     try:
-        out, _, _ = subprocess.run([IP_PATH, "-br", "link", "show"], 
-                                  capture_output=True, text=True, check=False)
-        for line in out.splitlines():
+        result = subprocess.run([IP_PATH, "-br", "link", "show"], 
+                               capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            print(f"detect_rndis_interface: ip link failed: {result.stderr}")
+            return None, False
+            
+        for line in result.stdout.splitlines():
             if line.startswith("enx") or line.startswith("eth1"):
                 parts = line.split()
                 iface = parts[0]
+                print(f"detect_rndis_interface: Found interface {iface}")
+                
                 # Check if interface has an IP address
-                ip_out, _, _ = subprocess.run([IP_PATH, "-4", "addr", "show", iface],
-                                             capture_output=True, text=True, check=False)
-                if "inet " in ip_out:
+                ip_result = subprocess.run([IP_PATH, "-4", "addr", "show", iface],
+                                          capture_output=True, text=True, check=False)
+                if ip_result.returncode != 0:
+                    print(f"detect_rndis_interface: ip addr failed for {iface}: {ip_result.stderr}")
+                    return iface, False
+                    
+                if "inet " in ip_result.stdout:
+                    print(f"detect_rndis_interface: Interface {iface} has IP")
                     return iface, True
                 else:
+                    print(f"detect_rndis_interface: Interface {iface} has no IP")
                     return iface, False
-    except Exception:
-        pass
+                    
+        print("detect_rndis_interface: No RNDIS interfaces found")
+    except Exception as e:
+        print(f"detect_rndis_interface: Exception: {e}")
     return None, False
 
 def teardown_rndis(wait_s: int):
