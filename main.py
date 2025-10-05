@@ -227,9 +227,8 @@ def write_squid_conf(cfg: dict):
     pw = cfg["proxy"]["password"] or ""
 
     if auth_enabled and user and pw:
-        content = f"""# Squid proxy with auth (IPv4 + IPv6)
+        content = f"""# Squid proxy with auth
 http_port {lan_ip}:3128
-http_port [::]:3128
 
 auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwd
 auth_param basic children 5
@@ -252,12 +251,10 @@ access_log /var/log/squid/access.log
 cache_log /var/log/squid/cache.log
 
 dns_nameservers 8.8.8.8 1.1.1.1
-dns_v4_first off
 """
     else:
-        content = f"""# Squid proxy without auth (IPv4 + IPv6)
+        content = f"""# Squid proxy without auth
 http_port {lan_ip}:3128
-http_port [::]:3128
 
 http_access allow all
 
@@ -272,7 +269,6 @@ access_log /var/log/squid/access.log
 cache_log /var/log/squid/cache.log
 
 dns_nameservers 8.8.8.8 1.1.1.1
-dns_v4_first off
 """
     (BASE / "squid.conf").write_text(content, encoding="utf-8")
     run_cmd(["sudo", "chown", "proxyuser:proxyuser", str(BASE / "squid.conf")], check=False)
@@ -368,40 +364,6 @@ def summary(cfg: dict):
     except Exception:
         direct_ip = "Unknown"
     lan_ip = cfg["lan_bind_ip"]
-    
-    # Detect IPv6 address
-    lan_ipv6 = "Unknown"
-    try:
-        result = subprocess.run(
-            ["ip", "-6", "addr", "show", "wlan0"], 
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0:
-            for line in result.stdout.split('\n'):
-                if 'global' in line and 'inet6' in line:
-                    ipv6 = line.split()[1].split('/')[0]
-                    if ipv6.startswith('2') or ipv6.startswith('2a'):  # Global unicast
-                        lan_ipv6 = ipv6
-                        break
-    except Exception:
-        pass
-    
-    # Fallback to eth0 if wlan0 fails
-    if lan_ipv6 == "Unknown":
-        try:
-            result = subprocess.run(
-                ["ip", "-6", "addr", "show", "eth0"], 
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0:
-                for line in result.stdout.split('\n'):
-                    if 'global' in line and 'inet6' in line:
-                        ipv6 = line.split()[1].split('/')[0]
-                        if ipv6.startswith('2') or ipv6.startswith('2a'):  # Global unicast
-                            lan_ipv6 = ipv6
-                            break
-        except Exception:
-            pass
     print("\n" + "=" * 60)
     print("🎉 SETUP COMPLETE (main.py)")
     print("=" * 60)
@@ -412,28 +374,17 @@ def summary(cfg: dict):
     print("🧪 Tests:")
     print(f"  curl -s https://api.ipify.org && echo")
     print(f"  curl -x http://{lan_ip}:3128 -s https://api.ipify.org && echo")
-    print(f"  curl -x http://[::1]:3128 -s https://api6.ipify.org && echo  # IPv6 test")
     print("")
-    print("💡 Use these exact commands on your local machine:")
-    print(f"  curl -x http://{lan_ip}:3128 -s https://api.ipify.org && echo    # IPv4 egress")
-    if lan_ipv6 != "Unknown":
-        print(f"  curl -x http://[{lan_ipv6}]:3128 -s https://api6.ipify.org && echo  # IPv6 egress")
-    else:
-        print(f"  curl -x http://[::1]:3128 -s https://api6.ipify.org && echo      # IPv6 egress (localhost)")
+    print("💡 Use this exact command on your local machine:")
+    print(f"  curl -x http://{lan_ip}:3128 -s https://api.ipify.org && echo")
     print("")
-    print("📋 Proxy endpoints (different egress IPs):")
-    print(f"  IPv4 Proxy: {lan_ip}:3128  → IPv4 egress IP")
-    if lan_ipv6 != "Unknown":
-        print(f"  IPv6 Proxy: [{lan_ipv6}]:3128  → IPv6 egress IP")
-    else:
-        print(f"  IPv6 Proxy: [::1]:3128     → IPv6 egress IP (localhost)")
+    print("📋 Proxy endpoints:")
+    print(f"  HTTP Proxy: {lan_ip}:3128")
     print(f"  SOCKS Proxy: {lan_ip}:1080")
     print("")
     print("🌐 Use from other machines on your network:")
     print(f"  HTTP Proxy: {lan_ip}:3128")
     print(f"  SOCKS Proxy: {lan_ip}:1080")
-    if lan_ipv6 != "Unknown":
-        print(f"  IPv6 HTTP Proxy: [{lan_ipv6}]:3128")
     print("")
     print("💻 Example usage in applications:")
     print(f"  curl -x http://{lan_ip}:3128 https://api.ipify.org")
