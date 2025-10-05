@@ -519,14 +519,6 @@ def api_history():
         return jsonify(data)
     return jsonify({'ips': [], 'rotations': 0, 'error': 'API unavailable'}), 500
 
-@app.route('/api/config')
-def api_config():
-    """Get proxy configuration"""
-    config = load_config()
-    return jsonify({
-        'lan_ip': config.get('lan_bind_ip', 'Unknown'),
-        'api_port': config.get('api', {}).get('port', 8088)
-    })
 
 @app.route('/api/rotate', methods=['POST'])
 def api_rotate():
