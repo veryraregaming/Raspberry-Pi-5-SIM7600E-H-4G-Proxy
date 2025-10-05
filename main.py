@@ -387,6 +387,14 @@ def create_config():
         cfg["rotation"] = default_cfg["rotation"]
         print("  ➕ Added missing rotation section")
     
+    # Preserve existing Discord webhook URL if it's been customized
+    if "discord" in existing_cfg and "webhook_url" in existing_cfg["discord"]:
+        existing_webhook = existing_cfg["discord"]["webhook_url"]
+        default_webhook = default_cfg["discord"]["webhook_url"]
+        if existing_webhook != default_webhook:
+            cfg["discord"]["webhook_url"] = existing_webhook
+            print("  🔗 Preserved existing Discord webhook URL")
+    
     # Write merged config
     with open("config.yaml", "w") as f:
         yaml.dump(cfg, f, default_flow_style=False)
