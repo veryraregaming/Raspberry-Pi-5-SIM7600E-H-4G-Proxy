@@ -117,57 +117,55 @@ def at(cmd, port=None, baud=115200, read_delay=0.5, timeout=1):
 def deep_reset_modem(method: str, wait_seconds: int):
     """
     Perform a deeper detach to avoid CGNAT 'sticky IP':
-      - 'mmcli': enable service, disable modem, wait, enable, stop service (so PPP can own ports)
+      - 'mmcli': enable service, disable modem, hold, enable, stop service (so PPP can own ports)
       - 'at':    send AT+CFUN=1,1 (reboot RF), optional CGATT detach
     """
     method = (method or "").lower().strip()
     print(f"Deep reset method: {method or 'none'} (wait {wait_seconds}s)")
     if method == "mmcli":
         try:
-            # systemctl enable/ensure running
+            # Ensure ModemManager is running to control the modem
             print("MM: Starting ModemManager service...")
-            subprocess.run([SUDO_PATH, "-n", SYSTEMCTL_PATH, "start", "ModemManager"], check=False, capture_output=True, text=True, timeout=10)
+            subprocess.run([SUDO_PATH, "-n", SYSTEMCTL_PATH, "start", "ModemManager"],
+                           check=False, capture_output=True, text=True, timeout=10)
             time.sleep(2)
-            
-            # best-effort: assume modem index 0
+
+            # Disable the modem (radio off / disconnect)
             print("MM: Disabling modem...")
-            subprocess.run([SUDO_PATH, "-n", MMCLI_PATH, "-m", "0", "--disable"], check=False, capture_output=True, text=True, timeout=15)
+            subprocess.run([SUDO_PATH, "-n", MMCLI_PATH, "-m", "0", "--disable"],
+                           check=False, capture_output=True, text=True, timeout=15)
             time.sleep(2)
-            
-            # wait long enough to fall out of NAT node
+
+            # Hold offline to let CGNAT/PGW forget the session mapping
             print(f"MM: Waiting {wait_seconds}s for CGNAT detach...")
             time.sleep(max(5, wait_seconds))
-            
+
+            # Re-enable radio, let it re-register
             print("MM: Enabling modem...")
-            subprocess.run([SUDO_PATH, "-n", MMCLI_PATH, "-m", "0", "--enable"], check=False, capture_output=True, text=True, timeout=15)
+            subprocess.run([SUDO_PATH, "-n", MMCLI_PATH, "-m", "0", "--enable"],
+                           check=False, capture_output=True, text=True, timeout=15)
             time.sleep(3)
-            
-            # stop to avoid port grabs when PPP starts
+
+            # Stop to avoid port grabs once PPP starts
             print("MM: Stopping ModemManager service...")
-            subprocess.run([SUDO_PATH, "-n", SYSTEMCTL_PATH, "stop", "ModemManager"], check=False, capture_output=True, text=True, timeout=10)
-            time.sleep(2)
-            
+            subprocess.run([SUDO_PATH, "-n", SYSTEMCTL_PATH, "stop", "ModemManager"],
+                           check=False, capture_output=True, text=True, timeout=10)
+            time.sleep(5)  # extra settle time
             print("MM: Deep reset via ModemManager completed.")
         except Exception as e:
             print(f"MM: Deep reset (mmcli) failed: {e}")
+
     elif method == "at":
         try:
             p = detect_modem_port()
             print(f"AT: Using port {p}")
-            
-            # Optional clean detach
             print("AT: Sending CGATT=0 (detach)...")
             at("AT+CGATT=0", port=p, read_delay=0.8, timeout=2)
             time.sleep(1.0)
-            
-            # Full function reset
             print("AT: Sending CFUN=1,1 (full function reset)...")
             at("AT+CFUN=1,1", port=p, read_delay=0.8, timeout=2)
-            
-            # wait for module to re-enumerate and register
-            print(f"AT: Waiting {wait_seconds}s for module reset...")
+            print(f"AT: Waiting {wait_seconds}s for module reset/re-enumeration...")
             time.sleep(max(30, wait_seconds))
-            
             print("AT: Deep reset via AT commands completed.")
         except Exception as e:
             print(f"AT: Deep reset (AT) failed: {e}")
@@ -222,7 +220,6 @@ def get_current_ip():
 # ========= Discord =========
 
 def build_discord_embed(current_ip, previous_ip=None, is_rotation=False, is_failure=False, error_message=None):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     history = load_ip_history()
 
     history_text = ""
@@ -309,6 +306,32 @@ def send_discord_notification(current_ip, previous_ip=None, is_rotation=False, i
         print(f"Failed to send Discord notification: {e}")
         return False
 
+# ========= Helpers for PPP workflow =========
+
+def teardown_ppp(wait_s: int):
+    """Stop any running PPP session and wait a bit."""
+    subprocess.run([SUDO_PATH, "-n", PKILL_PATH, "pppd"], check=False)
+    print(f"Waiting {wait_s} seconds for PPP teardown...")
+    time.sleep(max(1, int(wait_s)))
+
+def start_ppp():
+    """Start PPP session (non-interactive)."""
+    res = subprocess.run([SUDO_PATH, "-n", PPPD_PATH, "call", "ee"],
+                         capture_output=True, text=True, timeout=60, check=False)
+    if res.returncode != 0:
+        raise RuntimeError(f"PPP start failed: {res.stderr.strip() or res.stdout.strip()}")
+
+def wait_for_ppp_up(timeout_s: int) -> bool:
+    """Poll for ppp0 IPv4 address."""
+    deadline = time.time() + max(5, int(timeout_s))
+    while time.time() < deadline:
+        r = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"],
+                           capture_output=True, text=True)
+        if r.returncode == 0 and "inet " in r.stdout:
+            return True
+        time.sleep(2)
+    return False
+
 # ========= Global prev IP =========
 
 previous_ip = None
@@ -323,6 +346,11 @@ def status():
 
 @app.post('/rotate')
 def rotate():
+    """
+    Conditional escalation:
+      1) Attempt 1: PPP restart -> if IP changes, done.
+      2) If unchanged (or PPP not up), attempt 2+: deep reset (mmcli/AT) → PPP → longer wait → route fix → check IP.
+    """
     global previous_ip
     config = load_config()
     expected = config['api']['token']
@@ -336,79 +364,89 @@ def rotate():
     try:
         print("Starting IP rotation...")
 
-        rotation_config = config.get('rotation', {})
-        teardown_wait = int(rotation_config.get('ppp_teardown_wait', 15))
+        rotation_config = config.get('rotation', {}) or {}
+        teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
         restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
-        max_attempts  = int(rotation_config.get('max_attempts', 3))
-        deep_method   = (rotation_config.get('deep_reset', '') or '').lower()  # 'mmcli' | 'at' | ''
-        deep_wait     = int(rotation_config.get('deep_reset_wait', 120))       # seconds to wait during deep reset
+        max_attempts  = int(rotation_config.get('max_attempts', 2))
+        deep_method   = (rotation_config.get('deep_reset', '') or '').lower()  # 'mmcli' | 'at' | 'conditional' | ''
+        deep_wait     = int(rotation_config.get('deep_reset_wait', 180))       # seconds to wait during deep reset
 
-        print(f"Rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, max_attempts={max_attempts}, deep_reset={deep_method or 'none'} ({deep_wait}s)")
+        print(f"Rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, "
+              f"max_attempts={max_attempts}, deep_reset={deep_method or 'off'} ({deep_wait}s)")
 
-        # Try rotation attempts with conditional escalation
         for attempt in range(max_attempts):
             print(f"\n--- Rotation Attempt {attempt + 1}/{max_attempts} ---")
-            
-            # Kill existing PPP
-            subprocess.run([SUDO_PATH, "-n", PKILL_PATH, "pppd"], check=False)
-            print(f"Waiting {teardown_wait} seconds for PPP teardown...")
-            time.sleep(teardown_wait)
-            
+            # Always tear down PPP cleanly before any action
+            teardown_ppp(teardown_wait)
+
             if attempt == 0:
-                # First attempt: Simple PPP restart
+                # Attempt 1: PPP-only restart
                 print("Attempt 1: Simple PPP restart")
-                result = subprocess.run([SUDO_PATH, "-n", PPPD_PATH, "call", "ee"],
-                                        capture_output=True, text=True, timeout=30, check=False)
-            else:
-                # Subsequent attempts: Deep reset first, then PPP
-                print(f"Attempt {attempt + 1}: Deep reset + PPP restart")
-                
-                # Deep reset to escape CGNAT stickiness
-                if deep_method in ("mmcli", "at"):
-                    print(f"Performing deep reset ({deep_method}) before PPP restart...")
-                    deep_reset_modem(deep_method, deep_wait)
-                
-                result = subprocess.run([SUDO_PATH, "-n", PPPD_PATH, "call", "ee"],
-                                        capture_output=True, text=True, timeout=30, check=False)
-
-            # Check if PPP restart succeeded
-            if result.returncode != 0:
-                print(f"PPP restart failed on attempt {attempt + 1}: {result.stderr}")
-                if attempt == max_attempts - 1:
-                    error_msg = f"PPP restart failed after {max_attempts} attempts"
-                    print(f"IP rotation failed: {error_msg}")
-                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
-                    return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
-                else:
-                    continue  # Try next attempt
-
-            # Wait for new IP assignment
-            print(f"Waiting {restart_wait} seconds for new IP assignment...")
-            time.sleep(restart_wait)
-
-            # Ensure ppp0 is up
-            try:
-                res = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"], capture_output=True, text=True)
-                if res.returncode != 0 or 'inet ' not in res.stdout:
-                    print(f"ppp0 interface not up after attempt {attempt + 1}")
+                try:
+                    start_ppp()
+                except Exception as e:
+                    print(f"PPP restart failed on attempt 1: {e}")
                     if attempt == max_attempts - 1:
-                        error_msg = "ppp0 interface not up after restart"
+                        error_msg = "PPP restart failed on first attempt"
                         print(f"IP rotation failed: {error_msg}")
                         send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
                         return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
                     else:
-                        continue  # Try next attempt
-            except Exception:
-                print(f"Could not check ppp0 status after attempt {attempt + 1}")
+                        continue
+            else:
+                # Attempt 2+: Deep reset (if configured) then PPP
+                chosen = None
+                if deep_method in ("mmcli", "conditional"):
+                    chosen = "mmcli"
+                elif deep_method == "at":
+                    chosen = "at"
+
+                if chosen:
+                    print(f"Attempt {attempt + 1}: Deep reset ({chosen}) + PPP restart")
+                    deep_reset_modem(chosen, deep_wait)
+
+                    # Give USB serial ports time to re-enumerate after enable
+                    print("Waiting up to 15s for modem ports to re-enumerate...")
+                    t0 = time.time()
+                    while time.time() - t0 < 15:
+                        # If any ttyUSB is present, assume ready enough
+                        if any(n.startswith("ttyUSB") for n in os.listdir("/dev")):
+                            break
+                        time.sleep(1)
+                    else:
+                        print("Warning: modem ports not visible yet; proceeding with PPP anyway.")
+                else:
+                    print(f"Attempt {attempt + 1}: No deep reset configured; doing PPP restart again")
+
+                try:
+                    start_ppp()
+                except Exception as e:
+                    print(f"PPP restart failed on attempt {attempt + 1}: {e}")
+                    if attempt == max_attempts - 1:
+                        error_msg = f"PPP restart failed after {max_attempts} attempts"
+                        print(f"IP rotation failed: {error_msg}")
+                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
+                        return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                    else:
+                        continue
+
+            # Wait for IP assignment (longer on deep attempts)
+            extra = 0
+            if attempt > 0:
+                extra = max(30, restart_wait)   # add ~30–60s on deep attempts
+            total_wait = restart_wait + extra
+            print(f"Waiting {total_wait} seconds for new IP assignment...")
+            if not wait_for_ppp_up(total_wait):
+                print(f"ppp0 interface not up after attempt {attempt + 1}")
                 if attempt == max_attempts - 1:
-                    error_msg = "Could not check ppp0 status"
+                    error_msg = "ppp0 interface not up after restart"
                     print(f"IP rotation failed: {error_msg}")
                     send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
                     return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
                 else:
-                    continue  # Try next attempt
+                    continue
 
-            # Fix routing
+            # Fix routing (keep LAN primary, add PPP secondary)
             print("Fixing routing to prefer primary and keep PPP as secondary...")
             ensure_ppp_default_route()
 
@@ -417,22 +455,32 @@ def rotate():
             pdp = at('AT+CGPADDR') if new_ip != "Unknown" else ""
 
             if new_ip != previous_ip and new_ip != "Unknown":
-                # Success! New IP obtained
                 print(f"✅ IP rotation successful on attempt {attempt + 1}: {previous_ip} -> {new_ip}")
                 send_discord_notification(new_ip, previous_ip, is_rotation=True)
-                return jsonify({'status': 'success', 'pdp': pdp, 'public_ip': new_ip, 'previous_ip': previous_ip, 'attempts': attempt + 1})
+                return jsonify({
+                    'status': 'success',
+                    'pdp': pdp,
+                    'public_ip': new_ip,
+                    'previous_ip': previous_ip,
+                    'attempts': attempt + 1
+                })
             else:
-                # IP didn't change, try next attempt if available
                 print(f"IP unchanged on attempt {attempt + 1}: {new_ip} (was {previous_ip})")
                 if attempt < max_attempts - 1:
-                    print("Trying next attempt with deep reset...")
+                    print("Trying next attempt with escalation...")
                     continue
                 else:
-                    # All attempts failed
                     error_msg = f"IP did not change after {max_attempts} attempts"
                     print(f"IP rotation failed: {error_msg}")
                     send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
-                    return jsonify({'status': 'failed', 'error': error_msg, 'pdp': pdp, 'public_ip': new_ip, 'previous_ip': previous_ip, 'attempts': max_attempts}), 400
+                    return jsonify({
+                        'status': 'failed',
+                        'error': error_msg,
+                        'pdp': pdp,
+                        'public_ip': new_ip,
+                        'previous_ip': previous_ip,
+                        'attempts': max_attempts
+                    }), 400
 
     except Exception as e:
         error_msg = f"Rotation failed: {str(e)}"

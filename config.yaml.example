@@ -21,9 +21,9 @@ proxy:
   user: ''
 
 rotation:
-  max_attempts: 3
-  ppp_restart_wait: 30
-  ppp_teardown_wait: 60
+  max_attempts: 2
+  ppp_restart_wait: 60
+  ppp_teardown_wait: 30
   # Deep reset options to escape CGNAT stickiness (only used after failed attempts)
-  deep_reset: "mmcli"  # Options: "mmcli", "at", "" (empty for no deep reset)
+  deep_reset: "mmcli"  # Options: "mmcli", "at", "conditional", "" (empty for no deep reset)
   deep_reset_wait: 180  # seconds to hold the deep reset
