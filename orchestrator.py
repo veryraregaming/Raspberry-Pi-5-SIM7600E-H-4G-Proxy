@@ -447,8 +447,8 @@ def rotate():
                 if attempt == max_attempts - 1:
                     err = f"PPP restart failed after {max_attempts} attempts"
                     print(f"IP rotation failed: {err}")
-                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
-                    return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                    send_discord_notification(current_ip, prev_ipv4, is_rotation=False, is_failure=True, error_message=err)
+                    return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':prev_ipv4}), 500
                 continue
 
             extra = 0
@@ -461,8 +461,8 @@ def rotate():
                 if attempt == max_attempts - 1:
                     err = "ppp0 interface not up after restart"
                     print(f"IP rotation failed: {err}")
-                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
-                    return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                    send_discord_notification(current_ip, prev_ipv4, is_rotation=False, is_failure=True, error_message=err)
+                    return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':prev_ipv4}), 500
                 continue
 
             print("Fixing routing to prefer primary and keep PPP as secondary...")
