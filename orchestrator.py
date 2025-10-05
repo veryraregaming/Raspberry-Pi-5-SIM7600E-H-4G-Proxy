@@ -543,65 +543,65 @@ def rotate():
                         return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
                     continue
 
-            print("Fixing routing to prefer primary and keep PPP as secondary...")
-            ensure_ppp_default_route()
-            
-            # Re-apply policy routing after PPP restart
-            print("Re-applying policy routing for Squid...")
-            try:
-                # Ensure PPP routing table exists and has default route
-                subprocess.run([IP_PATH, "route", "replace", "default", "dev", "ppp0", "table", "ppp"], check=False)
+                print("Fixing routing to prefer primary and keep PPP as secondary...")
+                ensure_ppp_default_route()
                 
-                # Re-apply policy rule for marked packets
-                subprocess.run(["ip", "rule", "del", "fwmark", "0x1", "lookup", "ppp"], check=False)
-                subprocess.run(["ip", "rule", "add", "fwmark", "0x1", "lookup", "ppp", "priority", "1000"], check=False)
-                
-                # Re-apply packet marking rule for proxy user
-                subprocess.run([
-                    "iptables", "-t", "mangle", "-D", "OUTPUT", 
-                    "-m", "owner", "--uid-owner", "proxy", 
-                    "-j", "MARK", "--set-mark", "1"
-                ], check=False)
-                subprocess.run([
-                    "iptables", "-t", "mangle", "-A", "OUTPUT", 
-                    "-m", "owner", "--uid-owner", "proxy", 
-                    "-j", "MARK", "--set-mark", "1"
-                ], check=False)
-                print("✅ Policy routing re-applied")
-            except Exception as e:
-                print(f"⚠️ Policy routing re-application failed: {e}")
+                # Re-apply policy routing after PPP restart
+                print("Re-applying policy routing for Squid...")
+                try:
+                    # Ensure PPP routing table exists and has default route
+                    subprocess.run([IP_PATH, "route", "replace", "default", "dev", "ppp0", "table", "ppp"], check=False)
+                    
+                    # Re-apply policy rule for marked packets
+                    subprocess.run(["ip", "rule", "del", "fwmark", "0x1", "lookup", "ppp"], check=False)
+                    subprocess.run(["ip", "rule", "add", "fwmark", "0x1", "lookup", "ppp", "priority", "1000"], check=False)
+                    
+                    # Re-apply packet marking rule for proxy user
+                    subprocess.run([
+                        "iptables", "-t", "mangle", "-D", "OUTPUT", 
+                        "-m", "owner", "--uid-owner", "proxy", 
+                        "-j", "MARK", "--set-mark", "1"
+                    ], check=False)
+                    subprocess.run([
+                        "iptables", "-t", "mangle", "-A", "OUTPUT", 
+                        "-m", "owner", "--uid-owner", "proxy", 
+                        "-j", "MARK", "--set-mark", "1"
+                    ], check=False)
+                    print("✅ Policy routing re-applied")
+                except Exception as e:
+                    print(f"⚠️ Policy routing re-application failed: {e}")
 
-            # Check if we got a new IP
-            new_ip = get_current_ip()
-            pdp = at('AT+CGPADDR') if new_ip != "Unknown" else ""
+                # Check if we got a new IP
+                new_ip = get_current_ip()
+                pdp = at('AT+CGPADDR') if new_ip != "Unknown" else ""
 
-            if new_ip != previous_ip and new_ip != "Unknown":
-                # Success! New IP obtained
-                print(f"✅ IP rotation successful on attempt {attempt + 1}: {previous_ip} -> {new_ip}")
-                send_discord_notification(new_ip, previous_ip, is_rotation=True)
-                return jsonify({
-                    'status': 'success',
-                    'pdp': pdp,
-                    'public_ip': new_ip,
-                    'previous_ip': previous_ip,
-                    'attempts': attempt + 1
-                })
-            else:
-                print(f"IP unchanged on attempt {attempt + 1}: {new_ip} (was {previous_ip})")
-                if attempt < max_attempts - 1:
-                    print("Trying next attempt with escalation…")
-                    continue
-                err = f"IP did not change after {max_attempts} attempts"
-                print(f"IP rotation failed: {err}")
-                send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
-                return jsonify({
-                    'status': 'failed',
-                    'error': err,
-                    'pdp': pdp,
-                    'public_ip': new_ip,
-                    'previous_ip': previous_ip,
-                    'attempts': max_attempts
-                }), 400
+                if new_ip != previous_ip and new_ip != "Unknown":
+                    # Success! New IP obtained
+                    print(f"✅ IP rotation successful on attempt {attempt + 1}: {previous_ip} -> {new_ip}")
+                    send_discord_notification(new_ip, previous_ip, is_rotation=True)
+                    return jsonify({
+                        'status': 'success',
+                        'pdp': pdp,
+                        'public_ip': new_ip,
+                        'previous_ip': previous_ip,
+                        'attempts': attempt + 1
+                    })
+                else:
+                    print(f"IP unchanged on attempt {attempt + 1}: {new_ip} (was {previous_ip})")
+                    if attempt < max_attempts - 1:
+                        print("Trying next attempt with escalation…")
+                        continue
+                    err = f"IP did not change after {max_attempts} attempts"
+                    print(f"IP rotation failed: {err}")
+                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                    return jsonify({
+                        'status': 'failed',
+                        'error': err,
+                        'pdp': pdp,
+                        'public_ip': new_ip,
+                        'previous_ip': previous_ip,
+                        'attempts': max_attempts
+                    }), 400
 
     except Exception as e:
         err = f"Rotation failed: {str(e)}"
