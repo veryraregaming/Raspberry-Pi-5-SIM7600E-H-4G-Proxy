@@ -339,12 +339,13 @@ def install_dependencies():
 # ----------------- config -----------------
 
 def create_config():
-    print("📝 Creating config.yaml")
+    print("📝 Creating/updating config.yaml")
     lan_ip = detect_lan_ip()
-    token = generate_token()
-    cfg = {
+    
+    # Default configuration
+    default_cfg = {
         "lan_bind_ip": lan_ip,
-        "api": {"bind": "127.0.0.1", "port": 8088, "token": token},
+        "api": {"bind": "127.0.0.1", "port": 8088, "token": generate_token()},
         "proxy": {"auth_enabled": False, "user": "", "password": ""},
         "modem": {
             "apn": "everywhere",  # Default APN for EE (UK), can be overridden
@@ -359,10 +360,39 @@ def create_config():
         "pm2": {"enabled": True, "auto_restart": True, "ip_rotation_interval": 300, "max_restarts": 10, "restart_delay": 5000},
         "discord": {"webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN"}
     }
-    with open("config.yaml","w") as f:
+    
+    # Load existing config if it exists
+    existing_cfg = {}
+    if os.path.exists("config.yaml"):
+        try:
+            with open("config.yaml", "r") as f:
+                existing_cfg = yaml.safe_load(f) or {}
+            print("  📄 Found existing config.yaml, merging with defaults")
+        except Exception as e:
+            print(f"  ⚠️ Error reading existing config: {e}")
+    
+    # Merge existing config with defaults (existing values take priority)
+    cfg = default_cfg.copy()
+    for key, value in existing_cfg.items():
+        if isinstance(value, dict) and key in cfg and isinstance(cfg[key], dict):
+            # Merge nested dictionaries
+            cfg[key].update(value)
+        else:
+            # Replace top-level values
+            cfg[key] = value
+    
+    # Always update LAN IP and ensure rotation section exists
+    cfg["lan_bind_ip"] = lan_ip
+    if "rotation" not in cfg:
+        cfg["rotation"] = default_cfg["rotation"]
+        print("  ➕ Added missing rotation section")
+    
+    # Write merged config
+    with open("config.yaml", "w") as f:
         yaml.dump(cfg, f, default_flow_style=False)
+    
     print(f"  ✅ LAN IP: {lan_ip}")
-    print(f"  ✅ API Token: {token[:20]}…")
+    print(f"  ✅ API Token: {cfg['api']['token'][:20]}…")
     print(f"  ✅ Default APN: everywhere (EE UK - edit config.yaml to customize)")
     print("  ✅ Proxy auth: disabled (edit config.yaml later if you want auth)")
     print("  ✅ Discord: not configured (edit config.yaml to add webhook URL)")
