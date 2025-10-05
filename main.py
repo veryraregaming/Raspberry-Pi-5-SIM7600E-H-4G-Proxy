@@ -374,20 +374,30 @@ def create_config():
     # Merge existing config with defaults (existing values take priority)
     cfg = default_cfg.copy()
     
-    # Deep merge existing config with defaults
-    def deep_merge(existing, default):
-        """Recursively merge existing config with defaults, preserving existing values"""
+    # Smart merge: preserve user settings, reset carrier-specific settings
+    def smart_merge(existing, default):
+        """Merge config preserving user settings but resetting carrier-specific ones"""
         result = default.copy()
+        
         for key, value in existing.items():
-            if isinstance(value, dict) and key in result and isinstance(result[key], dict):
-                # Recursively merge nested dictionaries
-                result[key] = deep_merge(value, result[key])
+            if key == "modem":
+                # Always reset APN to default (carrier-specific)
+                # But preserve other modem settings like port/timeout if customized
+                if isinstance(value, dict) and key in result:
+                    result[key] = default[key].copy()
+                    # Only preserve non-APN settings if they've been customized
+                    for subkey, subvalue in value.items():
+                        if subkey != "apn" and subkey in default[key]:
+                            result[key][subkey] = subvalue
+            elif isinstance(value, dict) and key in result and isinstance(result[key], dict):
+                # Recursively merge other nested dictionaries
+                result[key] = smart_merge(value, result[key])
             else:
-                # Use existing value (preserves user settings)
+                # Use existing value for all other settings (preserves user settings)
                 result[key] = value
         return result
     
-    cfg = deep_merge(existing_cfg, default_cfg)
+    cfg = smart_merge(existing_cfg, default_cfg)
     
     # Only update LAN IP if it's different (network may have changed)
     if cfg.get("lan_bind_ip") != lan_ip:
@@ -404,10 +414,16 @@ def create_config():
     if added_sections:
         print(f"  ➕ Added missing sections: {', '.join(added_sections)}")
     
-    # Log preserved settings
+    # Log reset and preserved settings
+    reset_settings = []
     preserved_settings = []
+    
     for section, existing_value in existing_cfg.items():
-        if section in default_cfg and existing_value != default_cfg[section]:
+        if section == "modem" and "apn" in existing_value:
+            # APN is always reset (carrier-specific)
+            if existing_value["apn"] != default_cfg["modem"]["apn"]:
+                reset_settings.append("modem.apn")
+        elif section in default_cfg and existing_value != default_cfg[section]:
             if isinstance(existing_value, dict):
                 # Check for meaningful differences in nested dicts
                 for key, value in existing_value.items():
@@ -416,8 +432,10 @@ def create_config():
             else:
                 preserved_settings.append(section)
     
+    if reset_settings:
+        print(f"  🔄 Reset carrier-specific settings: {', '.join(reset_settings)}")
     if preserved_settings:
-        print(f"  🔒 Preserved existing settings: {', '.join(preserved_settings)}")
+        print(f"  🔒 Preserved user settings: {', '.join(preserved_settings)}")
     
     # Write merged config
     with open("config.yaml", "w") as f:
