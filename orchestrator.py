@@ -406,36 +406,36 @@ def rotate():
                         return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
                     else:
                         continue
-             else:
-                 # Attempt 2+: Deep reset (if enabled) then PPP
-                 if deep_enabled:
-                     print(f"Attempt {attempt + 1}: Deep reset ({deep_method}) + PPP restart")
-                     deep_reset_modem(deep_method, deep_wait)
+            else:
+                # Attempt 2+: Deep reset (if enabled) then PPP
+                if deep_enabled:
+                    print(f"Attempt {attempt + 1}: Deep reset ({deep_method}) + PPP restart")
+                    deep_reset_modem(deep_method, deep_wait)
 
-                     # Give USB serial ports time to re-enumerate after enable
-                     print("Waiting up to 15s for modem ports to re-enumerate...")
-                     t0 = time.time()
-                     while time.time() - t0 < 15:
-                         # If any ttyUSB is present, assume ready enough
-                         if any(n.startswith("ttyUSB") for n in os.listdir("/dev")):
-                             break
-                         time.sleep(1)
-                     else:
-                         print("Warning: modem ports not visible yet; proceeding with PPP anyway.")
-                 else:
-                     print(f"Attempt {attempt + 1}: Deep reset disabled; doing PPP restart again")
-
-                try:
-                    start_ppp()
-                except Exception as e:
-                    print(f"PPP restart failed on attempt {attempt + 1}: {e}")
-                    if attempt == max_attempts - 1:
-                        error_msg = f"PPP restart failed after {max_attempts} attempts"
-                        print(f"IP rotation failed: {error_msg}")
-                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
-                        return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                    # Give USB serial ports time to re-enumerate after enable
+                    print("Waiting up to 15s for modem ports to re-enumerate...")
+                    t0 = time.time()
+                    while time.time() - t0 < 15:
+                        # If any ttyUSB is present, assume ready enough
+                        if any(n.startswith("ttyUSB") for n in os.listdir("/dev")):
+                            break
+                        time.sleep(1)
                     else:
-                        continue
+                        print("Warning: modem ports not visible yet; proceeding with PPP anyway.")
+                else:
+                    print(f"Attempt {attempt + 1}: Deep reset disabled; doing PPP restart again")
+
+            try:
+                start_ppp()
+            except Exception as e:
+                print(f"PPP restart failed on attempt {attempt + 1}: {e}")
+                if attempt == max_attempts - 1:
+                    error_msg = f"PPP restart failed after {max_attempts} attempts"
+                    print(f"IP rotation failed: {error_msg}")
+                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
+                    return jsonify({'status':'failed','error':error_msg,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                else:
+                    continue
 
             # Wait for IP assignment (longer on deep attempts)
             extra = 0
