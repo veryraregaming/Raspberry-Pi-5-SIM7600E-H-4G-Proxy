@@ -408,6 +408,31 @@ def rotate():
 
             print("Fixing routing to prefer primary and keep PPP as secondary...")
             ensure_ppp_default_route()
+            
+            # Re-apply policy routing after PPP restart
+            print("Re-applying policy routing for Squid...")
+            try:
+                # Ensure PPP routing table exists and has default route
+                subprocess.run([IP_PATH, "route", "replace", "default", "dev", "ppp0", "table", "ppp"], check=False)
+                
+                # Re-apply policy rule for marked packets
+                subprocess.run(["ip", "rule", "del", "fwmark", "0x1", "lookup", "ppp"], check=False)
+                subprocess.run(["ip", "rule", "add", "fwmark", "0x1", "lookup", "ppp", "priority", "1000"], check=False)
+                
+                # Re-apply packet marking rule for proxy user
+                subprocess.run([
+                    "iptables", "-t", "mangle", "-D", "OUTPUT", 
+                    "-m", "owner", "--uid-owner", "proxy", 
+                    "-j", "MARK", "--set-mark", "1"
+                ], check=False)
+                subprocess.run([
+                    "iptables", "-t", "mangle", "-A", "OUTPUT", 
+                    "-m", "owner", "--uid-owner", "proxy", 
+                    "-j", "MARK", "--set-mark", "1"
+                ], check=False)
+                print("✅ Policy routing re-applied")
+            except Exception as e:
+                print(f"⚠️ Policy routing re-application failed: {e}")
 
             # Check if we got a new IP
             new_ip = get_current_ip()

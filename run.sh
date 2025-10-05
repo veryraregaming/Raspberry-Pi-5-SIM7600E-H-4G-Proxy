@@ -114,6 +114,51 @@ fi
 echo "==> Running main.py to write configs and bring PPP up…"
 python3 "${SCRIPT_DIR}/main.py" || true
 
+# -------- apply policy routing to pin Squid to ppp0 --------
+echo "==> Pinning Squid egress to ppp0 (policy routing)…"
+
+# Keep existing default (Wi-Fi/Eth) as primary
+DEF_GW=$(ip route show default | awk '/default/ {print $3; exit}')
+DEF_IF=$(ip route show default | awk '/default/ {print $5; exit}')
+if [[ -n "$DEF_GW" && -n "$DEF_IF" ]]; then
+  sudo ip route replace default via "$DEF_GW" dev "$DEF_IF" metric 100
+fi
+
+# Only proceed if ppp0 exists
+if ip -4 addr show ppp0 >/dev/null 2>&1; then
+  # Ensure a dedicated routing table for PPP
+  grep -q '^100 ppp$' /etc/iproute2/rt_tables || echo '100 ppp' | sudo tee -a /etc/iproute2/rt_tables >/dev/null
+
+  # Default route in the PPP table
+  sudo ip route replace default dev ppp0 table ppp
+
+  # Policy rule: packets marked 0x1 use table 'ppp'
+  sudo ip rule del fwmark 0x1 lookup ppp 2>/dev/null || true
+  sudo ip rule add fwmark 0x1 lookup ppp priority 1000
+
+  # Mark all OUTPUT traffic from Squid user (usually 'proxy') with 0x1
+  if command -v nft >/dev/null 2>&1; then
+    sudo nft add table inet mangle 2>/dev/null || true
+    sudo nft add chain inet mangle output '{ type filter hook output priority mangle ; }' 2>/dev/null || true
+    # delete any old rule first
+    sudo nft list chain inet mangle output 2>/dev/null | grep -q 'meta skuid "proxy" meta mark set 0x1' \
+      && sudo nft delete rule inet mangle output $(sudo nft -a list chain inet mangle output | awk '/meta skuid "proxy" meta mark set 0x1/ {print $(NF)}')
+    sudo nft add rule inet mangle output meta skuid "proxy" meta mark set 0x1
+  else
+    # iptables-legacy compatibility path
+    sudo iptables -t mangle -D OUTPUT -m owner --uid-owner proxy -j MARK --set-mark 1 2>/dev/null || true
+    sudo iptables -t mangle -A OUTPUT -m owner --uid-owner proxy -j MARK --set-mark 1
+  fi
+
+  # Avoid rp_filter dropping asymmetric replies from ppp0
+  echo 'net.ipv4.conf.all.rp_filter=2' | sudo tee /etc/sysctl.d/99-ppp-rpf.conf >/dev/null
+  sudo sysctl --system >/dev/null || true
+
+  echo "✅ Squid egress pinned to ppp0; Wi-Fi/Eth remains the system default."
+else
+  echo "⚠️ ppp0 not up yet; policy routing will be applied next run/rotation."
+fi
+
 # -------- ensure services are in correct state ------------------------
 # ensure Squid is enabled and running (usually auto-starts after install)
 systemctl enable --now squid || true
