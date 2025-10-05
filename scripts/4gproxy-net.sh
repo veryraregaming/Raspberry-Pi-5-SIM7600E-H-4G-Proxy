@@ -74,7 +74,20 @@ grep -qE "^[[:space:]]*${TABLE_ID}[[:space:]]+${TABLE_NAME}$" "${RT_TABLES}" 2>/
 }
 
 # 5) default route in proxy_table via cellular iface (no change to main)
-ip route replace default dev "${CELL_IFACE}" table "${TABLE_ID}"
+if [[ "${CELL_IFACE}" == "ppp0" ]]; then
+  # For PPP, get the peer IP as gateway
+  PPP_GATEWAY=$(ip -4 route show dev ppp0 | awk '/default/ {print $3}' | head -n1)
+  if [[ -n "${PPP_GATEWAY}" ]]; then
+    echo "[4gproxy-net] Using PPP gateway: ${PPP_GATEWAY}"
+    ip route replace default via "${PPP_GATEWAY}" dev "${CELL_IFACE}" table "${TABLE_ID}"
+  else
+    # Fallback to dev-only route
+    ip route replace default dev "${CELL_IFACE}" table "${TABLE_ID}"
+  fi
+else
+  # For other interfaces, use dev-only route
+  ip route replace default dev "${CELL_IFACE}" table "${TABLE_ID}"
+fi
 
 # 6) ip rule for fwmark==1 -> proxy_table
 ip rule add fwmark 0x1 table "${TABLE_ID}" pref 100 2>/dev/null || true
@@ -88,4 +101,6 @@ iptables -t nat -C POSTROUTING -o "${CELL_IFACE}" -j MASQUERADE 2>/dev/null || \
   iptables -t nat -A POSTROUTING -o "${CELL_IFACE}" -j MASQUERADE
 
 echo "[4gproxy-net] policy routing active: fwmark 0x1 -> table ${TABLE_ID} -> ${CELL_IFACE}"
+echo "[4gproxy-net] Routing table ${TABLE_ID} contents:"
+ip route show table "${TABLE_ID}" || echo "  (table empty or not found)"
 echo "[4gproxy-net] done."
