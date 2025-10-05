@@ -227,8 +227,9 @@ def write_squid_conf(cfg: dict):
     pw = cfg["proxy"]["password"] or ""
 
     if auth_enabled and user and pw:
-        content = f"""# Squid proxy with auth
+        content = f"""# Squid proxy with auth (IPv4 + IPv6)
 http_port {lan_ip}:3128
+http_port [::]:3128
 
 auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwd
 auth_param basic children 5
@@ -251,10 +252,12 @@ access_log /var/log/squid/access.log
 cache_log /var/log/squid/cache.log
 
 dns_nameservers 8.8.8.8 1.1.1.1
+dns_v4_first off
 """
     else:
-        content = f"""# Squid proxy without auth (open)
+        content = f"""# Squid proxy without auth (IPv4 + IPv6)
 http_port {lan_ip}:3128
+http_port [::]:3128
 
 http_access allow all
 
@@ -269,6 +272,7 @@ access_log /var/log/squid/access.log
 cache_log /var/log/squid/cache.log
 
 dns_nameservers 8.8.8.8 1.1.1.1
+dns_v4_first off
 """
     (BASE / "squid.conf").write_text(content, encoding="utf-8")
     run_cmd(["sudo", "chown", "proxyuser:proxyuser", str(BASE / "squid.conf")], check=False)
@@ -374,6 +378,7 @@ def summary(cfg: dict):
     print("🧪 Tests:")
     print(f"  curl -s https://api.ipify.org && echo")
     print(f"  curl -x http://{lan_ip}:3128 -s https://api.ipify.org && echo")
+    print(f"  curl -x http://[::1]:3128 -s https://api6.ipify.org && echo  # IPv6 test")
     print("=" * 60)
 
 def main():

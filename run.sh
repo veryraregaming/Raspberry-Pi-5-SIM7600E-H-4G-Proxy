@@ -118,6 +118,10 @@ python3 "${SCRIPT_DIR}/main.py" || true
 # ensure Squid is enabled and running (usually auto-starts after install)
 systemctl enable --now squid || true
 
+# reload Squid to pick up IPv6 configuration changes
+echo "==> Reloading Squid for IPv6 support..."
+systemctl reload squid || systemctl restart squid || true
+
 # ensure ModemManager is not holding ports for PPP (main.py stops it, but keep idempotent)
 systemctl stop ModemManager || true
 
