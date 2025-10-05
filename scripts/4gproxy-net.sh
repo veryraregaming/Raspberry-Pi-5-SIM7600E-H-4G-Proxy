@@ -93,9 +93,11 @@ fi
 # 6) ip rule for fwmark==1 -> proxy_table
 ip rule add fwmark 0x1 table "${TABLE_ID}" pref 100 2>/dev/null || true
 
-# 7) mark packets from proxy user
+# 7) mark packets from proxy user (both proxy and root for Squid)
 iptables -t mangle -D OUTPUT -m owner --uid-owner "${PROXY_USER}" -j MARK --set-mark 1 2>/dev/null || true
+iptables -t mangle -D OUTPUT -m owner --uid-owner root -j MARK --set-mark 1 2>/dev/null || true
 iptables -t mangle -A OUTPUT -m owner --uid-owner "${PROXY_USER}" -j MARK --set-mark 1
+iptables -t mangle -A OUTPUT -m owner --uid-owner root -j MARK --set-mark 1
 
 # 8) NAT only when leaving the cellular iface
 iptables -t nat -C POSTROUTING -o "${CELL_IFACE}" -j MASQUERADE 2>/dev/null || \
