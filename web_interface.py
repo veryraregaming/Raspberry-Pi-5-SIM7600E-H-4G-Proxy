@@ -257,6 +257,16 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
 
+                <!-- Controls -->
+                <div class="card">
+                    <h3>🎮 Controls</h3>
+                    <div id="controls">
+                        <button class="button success" onclick="rotateIP()">🔄 Rotate IP</button>
+                        <button class="button" onclick="sendNotification()">📱 Send Notification</button>
+                        <button class="button" onclick="refreshData()">🔄 Refresh</button>
+                    </div>
+                </div>
+
                 <!-- Configuration -->
                 <div class="card">
                     <h3>⚙️ Configuration</h3>
@@ -265,16 +275,6 @@ HTML_TEMPLATE = """
                         <p><strong>Rotation Timing:</strong> <span id="config-rotation">Loading...</span></p>
                         <p><strong>Discord:</strong> <span id="config-discord">Loading...</span></p>
                         <p><strong>Proxy Auth:</strong> <span id="config-auth">Loading...</span></p>
-                    </div>
-                </div>
-                
-                <!-- Controls -->
-                <div class="card">
-                    <h3>🎮 Controls</h3>
-                    <div id="controls">
-                        <button class="button success" onclick="rotateIP()">🔄 Rotate IP</button>
-                        <button class="button" onclick="sendNotification()">📱 Send Notification</button>
-                        <button class="button" onclick="refreshData()">🔄 Refresh</button>
                     </div>
                 </div>
             </div>
@@ -381,7 +381,7 @@ HTML_TEMPLATE = """
                 document.getElementById('api-url').textContent = `127.0.0.1:${data.api_port || '8088'}`;
                 
                 // Update configuration display
-                document.getElementById('config-apn').textContent = 'Auto-detected by run.sh';
+                document.getElementById('config-apn').textContent = data.current_apn || 'Auto-detected by run.sh';
                 
                 const rotation = data.rotation;
                 if (rotation) {
@@ -491,10 +491,20 @@ def api_config():
     try:
         config = load_config()
         
+        # Get current APN from orchestrator API
+        current_apn = "Auto-detected by run.sh"
+        try:
+            status_data = api_request('/status')
+            if status_data and 'pdp' in status_data and status_data['pdp']:
+                current_apn = f"{status_data['pdp']} (auto-detected)"
+        except:
+            pass
+        
         # Only return safe config values (no tokens or sensitive data)
         safe_config = {
             'lan_ip': config.get('lan_bind_ip', 'Unknown'),
             'api_port': config.get('api', {}).get('port', 8088),
+            'current_apn': current_apn,
             'rotation': config.get('rotation', {}),
             # Modem settings are handled by run.sh, not config
             'proxy': {
