@@ -351,7 +351,8 @@ def create_config():
             "port": "/dev/ttyUSB2",  # Default port, auto-detected
             "timeout": 2
         },
-        "pm2": {"enabled": True, "auto_restart": True, "ip_rotation_interval": 300, "max_restarts": 10, "restart_delay": 5000}
+        "pm2": {"enabled": True, "auto_restart": True, "ip_rotation_interval": 300, "max_restarts": 10, "restart_delay": 5000},
+        "discord": {"webhook_url": "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN"}
     }
     with open("config.yaml","w") as f:
         yaml.dump(cfg, f, default_flow_style=False)
@@ -359,6 +360,7 @@ def create_config():
     print(f"  ✅ API Token: {token[:20]}…")
     print(f"  ✅ Default APN: everywhere (EE UK - edit config.yaml to customize)")
     print("  ✅ Proxy auth: disabled (edit config.yaml later if you want auth)")
+    print("  ✅ Discord: not configured (edit config.yaml to add webhook URL)")
     return cfg
 
 def create_squid_config(cfg):
@@ -566,6 +568,7 @@ def test_and_print(cfg):
     print(f"  curl -x http://{lan_ip}:3128 https://api.ipify.org")
     print("🔧 Squid: sudo systemctl status squid | sudo systemctl restart squid")
     print("⚙️ Edit config.yaml for auth, then: sudo systemctl restart squid")
+    print("📱 Discord: Edit config.yaml webhook_url, then: python3 test_discord.py")
     print("="*60)
 
 # ----------------- main -----------------

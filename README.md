@@ -76,6 +76,42 @@ pm2:
   ip_rotation_interval: 300   # IP rotation interval (seconds)
   max_restarts: 10            # Maximum restart attempts
   restart_delay: 5000         # Delay between restarts (ms)
+discord:
+  webhook_url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN"  # Discord notifications
+```
+
+## 📱 Discord Notifications
+
+### **Setup Discord Notifications**
+1. **Create Discord Webhook:**
+   - Go to your Discord server → Server Settings → Integrations → Webhooks
+   - Create a new webhook and copy the URL
+
+2. **Configure in config.yaml:**
+   ```yaml
+   discord:
+     webhook_url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN"
+   ```
+
+3. **Test notifications:**
+   ```bash
+   python3 test_discord.py
+   ```
+
+### **Notification Types**
+- **🚀 Proxy Initialization** - When proxy starts up
+- **🔄 IP Rotation Complete** - When IP changes successfully  
+- **📊 Status Update** - Manual status notifications
+
+### **API Endpoints**
+```bash
+# Send status notification
+curl -X POST http://127.0.0.1:8088/notify \
+  -H "Authorization: Bearer YOUR_API_TOKEN"
+
+# Rotate IP and notify
+curl -X POST http://127.0.0.1:8088/rotate \
+  -H "Authorization: Bearer YOUR_API_TOKEN"
 ```
 
 ## 🔧 Management Commands
