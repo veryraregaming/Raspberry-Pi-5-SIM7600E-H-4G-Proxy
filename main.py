@@ -328,12 +328,12 @@ def activate_modem_via_ppp(apn: str):
     create_ppp_config(apn, at_port)
 
     print("  🚀 Starting PPP session (pppd call ee)…")
-    out, err, rc = run_cmd(["sudo", PPPD_PATH, "call", "ee"], check=False, timeout=30)
+    out, err, rc = run_cmd(["sudo", PPPD_PATH, "call", "ee"], check=False, timeout=60)
     if rc != 0 and err:
         print(f"  ⚠️ pppd error: {err}")
 
     print("  ⏳ Waiting for ppp0 IPv4…")
-    for _ in range(30):
+    for _ in range(60):
         time.sleep(1)
         out, _, _ = run_cmd([IP_PATH, "-4", "addr", "show", "ppp0"], check=False)
         if "inet " in out:
