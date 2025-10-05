@@ -1,25 +1,22 @@
-
 # Raspberry Pi 5 + SIM7600E-H 4G Proxy
 
-A lightweight 4G proxy solution for Raspberry Pi 5 with SIM7600E-H modem. Provides HTTP/SOCKS proxy with automatic IP rotation capabilities.
+A reliable 4G proxy solution for Raspberry Pi 5 with SIM7600E-H modem. Provides HTTP proxy with automatic SIM card routing via PPP connection.
 
 ## 🚀 Features
 
-- **Auto-detection**: Automatically finds SIM7600 cellular interface (wwan*/ppp*)
-- **Dual Proxy Support**: HTTP & SOCKS proxy via 3proxy
-- **NAT Routing**: Routes outbound traffic through 4G modem
-- **IP Rotation**: Change public IP using AT commands via REST API
-- **Auto IP Rotation**: Configurable automatic IP rotation (default: 5 minutes)
-- **PM2 Process Management**: Auto-restart, monitoring, and start on boot
-- **REST API**: Control and monitor via HTTP endpoints
-- **Token Authentication**: Secure API access with configurable tokens
-- **No Auth Option**: Optional proxy without username/password
+- **One-Shot Setup**: Single command installation with `sudo ./run.sh`
+- **PPP Connection**: Reliable SIM7600E-H activation via PPP dial-up
+- **Automatic APN Detection**: Works with any UK carrier SIM card
+- **Simple Routing**: Routes proxy traffic through SIM card, keeps WiFi for SSH
+- **HTTP Proxy**: Squid proxy on port 3128
+- **Universal**: Works with any username on any system
+- **No SSH Disconnections**: WiFi remains primary route for stable access
 
 ## 📋 Requirements
 
 - Raspberry Pi 5
 - SIM7600E-H 4G modem
-- Ubuntu Server 22.04+ (recommended)
+- Ubuntu Server 24.04+ (recommended)
 - Active SIM card with data plan
 - Root/sudo access
 
@@ -27,65 +24,45 @@ A lightweight 4G proxy solution for Raspberry Pi 5 with SIM7600E-H modem. Provid
 
 ### **One-Command Setup (Recommended)**
 ```bash
-git clone <repository-url>
+git clone https://github.com/veryraregaming/Raspberry-Pi-5-SIM7600E-H-4G-Proxy.git
 cd Raspberry-Pi-5-SIM7600E-H-4G-Proxy
-chmod +x run.sh
 sudo ./run.sh
-```
-
-**Works from anywhere:**
-```bash
-# Clone to any directory
-git clone <repository-url> /home/user/my-proxy
-cd /home/user/my-proxy
-chmod +x run.sh
-sudo ./run.sh
-
-# Or run from anywhere
-chmod +x /path/to/your/proxy/run.sh
-sudo /path/to/your/proxy/run.sh
 ```
 
 **That's it!** The script will:
+- ✅ Install all dependencies (Squid, PPP, PM2, etc.)
 - ✅ Auto-detect your LAN IP
-- ✅ Generate secure tokens
-- ✅ Install all dependencies (including PM2)
-- ✅ Configure 3proxy
-- ✅ Setup network forwarding
-- ✅ Start all services with PM2
-- ✅ Enable auto IP rotation (every 5 minutes)
-- ✅ Configure auto-restart on boot
+- ✅ Generate secure configuration
+- ✅ Activate SIM7600E-H modem via PPP
+- ✅ Setup simple routing through SIM card
+- ✅ Start Squid proxy on port 3128
 - ✅ Show test commands and proxy details
 
 **After setup, you'll see:**
-- 📡 HTTP Proxy: `192.168.1.37:8080`
-- 📡 SOCKS Proxy: `192.168.1.37:1080`
-- 🧪 Test command: `curl -x http://192.168.1.37:8080 https://api.ipify.org`
-- 🔄 IP rotation: Automatic every 5 minutes
-- 🔑 API token: Auto-generated and saved to config.yaml
+- 📡 HTTP Proxy: `192.168.1.37:3128`
+- 🌐 Current Public IP: `[SIM-card-IP]` (not your home network IP)
+- 🧪 Test command: `curl -x http://192.168.1.37:3128 https://api.ipify.org`
 
-**When PM2 restarts services, you'll see:**
-- 🚀 4G Proxy Orchestrator Started
-- 📡 HTTP Proxy: `192.168.1.37:8080`
-- 🔓 No authentication required (or 🔐 Authentication: user:pass)
-- 🧪 Test Command: `curl -x http://192.168.1.37:8080 https://api.ipify.org`
+## 🌐 Supported Networks
 
-### **Manual Setup (Advanced)**
-```bash
-# 1. Clone and install dependencies
-git clone <repository-url>
-cd Raspberry-Pi-5-SIM7600E-H-4G-Proxy
-sudo apt update
-sudo apt install python3 python3-pip python3-yaml python3-serial python3-requests iptables 3proxy python3-flask -y
+### **UK Carriers:**
+- **EE** - `everywhere` APN
+- **O2** - `mobile.o2.co.uk` / `payandgo.o2.co.uk`
+- **Vodafone** - `internet` / `pp.vodafone.co.uk`
+- **Three UK** - `three.co.uk`
 
-# 2. Run automated setup
-sudo python3 main.py
+### **UK MVNOs:**
+- **giffgaff** - `giffgaff.com`
+- **Tesco Mobile** - `prepay.tesco-mobile.com`
+- **ASDA Mobile** - `everywhere` (EE network)
+- **BT Mobile** - `everywhere` (EE network)
+- **1pMobile** - `data.uk`
+- **Sky Mobile** - `mobile.sky`
+- **Lycamobile UK** - `data.lycamobile.co.uk`
 
-# 3. Or configure manually
-cp config.yaml.example config.yaml
-nano config.yaml
-sudo python3 orchestrator.py
-```
+### **International SIMs:**
+- Any SIM card that supports PPP dial-up (`ATD*99#`)
+- Most modern SIMs support this standard
 
 ## ⚙️ Configuration
 
@@ -100,6 +77,10 @@ proxy:
   auth_enabled: false         # Set to true to enable proxy authentication
   user: ""                    # Proxy username (only used if auth_enabled: true)
   password: ""                # Proxy password (only used if auth_enabled: true)
+modem:
+  apn: "everywhere"           # APN (auto-detected from carriers.json)
+  port: "/dev/ttyUSB2"        # Modem AT port (auto-detected)
+  timeout: 30                 # Connection timeout
 pm2:
   enabled: true               # Enable PM2 process management
   auto_restart: true          # Auto-restart on crash
@@ -108,125 +89,62 @@ pm2:
   restart_delay: 5000         # Delay between restarts (ms)
 ```
 
-## 🌐 API Endpoints
+## 🔧 Management Commands
 
-### GET /status
-Check current IP status
+### **Squid Proxy**
 ```bash
-curl http://127.0.0.1:8088/status
+# Check status
+sudo systemctl status squid
+
+# Restart proxy
+sudo systemctl restart squid
+
+# View logs
+sudo journalctl -u squid -f
 ```
 
-### POST /rotate
-Rotate public IP (requires token)
+### **PM2 (Orchestrator)**
 ```bash
-# Get token from config.yaml first
-curl -X POST \
-  -H "Authorization: YOUR_TOKEN_FROM_CONFIG" \
-  http://127.0.0.1:8088/rotate
-```
-
-**Note:** IP rotation happens automatically every 5 minutes, so manual rotation is usually not needed.
-
-## 🔄 IP Rotation
-
-### Automatic Rotation
-IP rotation happens automatically every 5 minutes (configurable in `config.yaml`).
-
-### Manual Rotation
-```bash
-# Using the API (get token from config.yaml)
-curl -X POST -H "Authorization: YOUR_TOKEN" http://127.0.0.1:8088/rotate
-
-# Or directly via AT commands
-echo -e "AT+CGACT=0,1\r" | sudo tee /dev/ttyUSB2
-sleep 2
-echo -e "AT+CGACT=1,1\r" | sudo tee /dev/ttyUSB2
-```
-
-## 🔧 PM2 Process Management
-
-### View Status
-```bash
+# Check status
 pm2 status
-```
 
-### View Logs
-```bash
+# View logs
 pm2 logs
-pm2 logs 4g-proxy-orchestrator
-pm2 logs 4g-proxy-auto-rotate
+
+# Restart
+pm2 restart 4g-proxy-orchestrator
 ```
 
-### Control Services
+### **PPP Connection**
 ```bash
-# Restart all services
-pm2 restart all
+# Check PPP status
+ip -4 addr show ppp0
 
-# Stop all services
-pm2 stop all
-
-# Start all services
-pm2 start all
-
-# Monitor in real-time
-pm2 monit
+# Restart PPP
+sudo pkill pppd
+sudo pppd call ee
 ```
 
-### PM2 Services
-- **`4g-proxy-orchestrator`** - Main API server
-- **`4g-proxy-3proxy`** - HTTP/SOCKS proxy
-- **`4g-proxy-auto-rotate`** - Automatic IP rotation
+## 🧪 Testing
 
-### Customization
+### **Test Proxy**
 ```bash
-# Edit configuration
-nano config.yaml
+# Test from Pi
+curl -x http://192.168.1.37:3128 https://api.ipify.org
 
-# Restart services to apply changes
-pm2 restart all
+# Test from another machine on same network
+curl -x http://[PI-IP]:3128 https://api.ipify.org
 ```
 
-**Configurable options:**
-- IP rotation interval (default: 5 minutes)
-- Proxy authentication (username/password)
-- API token
-- LAN IP address
-
-### Example Configuration
-```yaml
-pm2:
-  ip_rotation_interval: 600   # 10 minutes
-  # ip_rotation_interval: 1800  # 30 minutes
-  # ip_rotation_interval: 3600  # 1 hour
-```
-
-## 🛡️ Security Notes
-
-- **Never commit `config.yaml`** - it contains sensitive tokens
-- Use strong, random tokens for API authentication
-- Consider firewall rules to restrict API access
-- Monitor logs for unauthorized access attempts
-
-## 📁 Project Structure
-
-```
-Raspberry-Pi-5-SIM7600E-H-4G-Proxy/
-├── main.py                 # One-command automated setup
-├── run.sh                  # Simple setup script
-├── orchestrator.py         # Main application
-├── auto_rotate.py          # Automatic IP rotation script
-├── config.yaml.example     # Configuration template
-├── requirements.txt        # Python dependencies
-├── ecosystem.config.js     # PM2 configuration (auto-generated)
-├── 3proxy.cfg              # 3proxy configuration (auto-generated)
-├── scripts/
-│   └── 4gproxy-net.sh      # Network setup script
-└── README.md               # This file
+### **Check SIM Card IP**
+```bash
+# Should return SIM card IP, not home network IP
+curl -x http://192.168.1.37:3128 https://api.ipify.org
 ```
 
 ## 🔍 Troubleshooting
 
-### Modem Not Detected
+### **Modem Not Detected**
 ```bash
 # Check USB devices
 lsusb | grep -i sim
@@ -235,35 +153,72 @@ lsusb | grep -i sim
 ls /dev/ttyUSB*
 
 # Test AT commands
-echo -e "AT\r" | sudo tee /dev/ttyUSB2
+echo "AT" | sudo tee /dev/ttyUSB2
 ```
 
-### No Internet Connection
+### **PPP Connection Failed**
 ```bash
-# Check interface status
-ip addr show | grep -E 'wwan|ppp'
+# Check PPP logs
+sudo tail -f /var/log/ppp-ee.log
 
-# Test connectivity
-ping -I wwan0 8.8.8.8
+# Restart PPP
+sudo pkill pppd
+sudo pppd call ee
 ```
 
-### API Not Responding
+### **Proxy Not Working**
 ```bash
-# Check if service is running
-ps aux | grep orchestrator.py
+# Check Squid status
+sudo systemctl status squid
 
-# Check port binding
-netstat -tlnp | grep 8088
+# Check Squid logs
+sudo tail -f /var/log/squid/access.log
+
+# Test direct connection
+curl -s https://api.ipify.org
 ```
 
-### Flask Module Not Found
+### **Wrong IP (Home Network Instead of SIM)**
 ```bash
-# Install Flask and dependencies
-pip3 install -r requirements.txt --break-system-packages
+# Check routing
+ip route show
 
-# Or install Flask via apt
-sudo apt install python3-flask -y
+# Check ppp0 interface
+ip -4 addr show ppp0
+
+# Restart setup
+sudo ./run.sh
 ```
+
+## 📁 Project Structure
+
+```
+raspi-4g-proxy-v2/
+├── run.sh                    # Main setup script
+├── main.py                   # Core logic and PPP activation
+├── orchestrator.py           # PM2 management
+├── carriers.json             # UK carrier APN configurations
+├── config.yaml.example       # Configuration template
+├── requirements.txt          # Python dependencies
+├── scripts/
+│   └── 4gproxy-net.sh        # Network routing script
+└── README.md                 # This file
+```
+
+## 🔄 How It Works
+
+1. **PPP Activation**: Uses `pppd call ee` to establish PPP connection
+2. **Simple Routing**: Adds default route via ppp0 with higher metric
+3. **WiFi Stability**: Keeps WiFi as primary route for SSH access
+4. **Proxy Traffic**: Squid routes through ppp0 to SIM card
+5. **APN Detection**: Automatically tries APNs from carriers.json
+
+## 🛡️ Security Notes
+
+- **Never commit `config.yaml`** - it contains sensitive tokens
+- Use strong, random tokens for API authentication
+- Consider firewall rules to restrict proxy access
+- Monitor logs for unauthorized access attempts
 
 ## 📝 License
 
