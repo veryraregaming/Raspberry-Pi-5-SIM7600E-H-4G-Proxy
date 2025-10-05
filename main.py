@@ -483,22 +483,14 @@ def create_pm2_ecosystem():
         },
         {
             "name": "4g-proxy-squid",
-            "script": "./run_squid.sh",
-            "interpreter": "bash",
-            "cwd": script_dir,
-            "autorestart": True,
-            "max_restarts": 10,
-            "restart_delay": 5000
-        },
-        {
-            "name": "4g-proxy-auto-rotate",
-            "script": "auto_rotate.py",
-            "interpreter": "python3",
+            "script": "squid",
+            "args": "-N -f /etc/squid/squid.conf",
+            "interpreter": "none",
             "cwd": script_dir,
             "autorestart": True,
             "max_restarts": 10,
             "restart_delay": 5000,
-            "env": {"PYTHONPATH": script_dir}
+            "user": "proxyuser"
         }
     ]
     with open("ecosystem.config.js","w") as f:
@@ -570,14 +562,12 @@ def test_and_print(cfg):
     print("\n" + "="*60)
     print("🎉 SETUP COMPLETE!")
     print("="*60)
-    print(f"📡 HTTP Proxy: {lan_ip}:8080")
-    print(f"📡 SOCKS Proxy: {lan_ip}:1080")
+    print(f"📡 HTTP Proxy: {lan_ip}:3128")
     print(f"🌐 Current Public IP: {current_ip}")
-    print(f"🔄 IP Rotation: every {interval_m} minutes")
     print("🧪 Test:")
-    print(f"  curl -x http://{lan_ip}:8080 https://api.ipify.org")
+    print(f"  curl -x http://{lan_ip}:3128 https://api.ipify.org")
     print("🔧 PM2: pm2 status | pm2 logs | pm2 restart all")
-    print("⚙️ Edit config.yaml for auth, then: pm2 restart 4g-proxy-3proxy")
+    print("⚙️ Edit config.yaml for auth, then: pm2 restart 4g-proxy-squid")
     print("="*60)
 
 # ----------------- main -----------------
