@@ -24,6 +24,16 @@ rotation:
   max_attempts: 2
   ppp_restart_wait: 60
   ppp_teardown_wait: 30
-  # Deep reset options to escape CGNAT stickiness (only used after failed attempts)
-  deep_reset: "mmcli"  # Options: "mmcli", "at", "conditional", "" (empty for no deep reset)
-  deep_reset_wait: 180  # seconds to hold the deep reset
+  
+  # Deep reset settings - only used if simple rotation fails
+  # Set to "off" or "" to disable deep reset (faster but may not change IP)
+  # Set to "mmcli" to use ModemManager (recommended for most carriers)
+  # Set to "at" to use AT commands (fallback if mmcli doesn't work)
+  deep_reset: "off"  # Options: "mmcli", "at", "off" (or empty string)
+  
+  # How long to hold modem offline during deep reset (seconds)
+  # Longer = better chance of new IP, but longer downtime
+  # 60-120s: Fast but may not escape CGNAT
+  # 180-300s: Good balance (recommended)
+  # 600s+: Maximum IP change chance but long downtime
+  deep_reset_wait: 180

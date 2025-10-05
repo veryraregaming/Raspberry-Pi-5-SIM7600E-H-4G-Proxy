@@ -313,7 +313,13 @@ def write_config_yaml():
         "lan_bind_ip": detect_lan_ip(),
         "api": {"bind": "127.0.0.1", "port": 8088, "token": make_token()},
         "proxy": {"auth_enabled": False, "user": "", "password": ""},
-        "rotation": {"ppp_teardown_wait": 30, "ppp_restart_wait": 60, "max_attempts": 2, "deep_reset": "mmcli", "deep_reset_wait": 180},
+        "rotation": {
+            "ppp_teardown_wait": 30,    # seconds to wait after killing PPP
+            "ppp_restart_wait": 60,     # seconds to wait for new IP after PPP start
+            "max_attempts": 2,          # try simple restart first, then escalate
+            "deep_reset": "off",        # "off"=fast, "mmcli"=reliable, "at"=fallback
+            "deep_reset_wait": 180      # seconds to hold modem offline for CGNAT escape
+        },
         "pm2": {"enabled": True, "auto_restart": True, "ip_rotation_interval": 300, "max_restarts": 10, "restart_delay": 5000},
         "discord": {"webhook_url": ""},  # set if you want notifications
     }
