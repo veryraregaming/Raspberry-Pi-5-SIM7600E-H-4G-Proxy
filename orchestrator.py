@@ -289,6 +289,18 @@ def rotate():
                 'previous_ip': previous_ip
             }), 500
         
+        # CRITICAL: Fix routing to ensure traffic goes through ppp0, not WiFi
+        print("Fixing routing to use ppp0...")
+        try:
+            # Remove any existing default route (WiFi might have taken over)
+            subprocess.run(['sudo', 'ip', 'route', 'del', 'default'], check=False)
+            # Add default route through ppp0 with higher metric (lower priority than WiFi)
+            subprocess.run(['sudo', 'ip', 'route', 'add', 'default', 'dev', 'ppp0', 'metric', '200'], check=True)
+            print("Routing fixed - traffic will go through ppp0")
+        except Exception as e:
+            print(f"Warning: Could not fix routing: {e}")
+            # Continue anyway, as PPP might still work
+        
         # Get new IP
         new_ip = get_current_ip()
         pdp = at('AT+CGPADDR') if new_ip != "Unknown" else ""

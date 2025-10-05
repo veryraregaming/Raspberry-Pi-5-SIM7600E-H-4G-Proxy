@@ -17,6 +17,11 @@ chown -R $USER:$USER state 2>/dev/null || true
 chmod 755 state
 echo "✅ State directory created"
 
+# --- setup sudoers for PPP and routing commands ---
+echo "==> Setting up sudoers for PPP and routing..."
+echo "$USER ALL=(ALL) NOPASSWD: /usr/sbin/pppd, /usr/bin/pkill, /sbin/ip route add, /sbin/ip route del" | sudo tee /etc/sudoers.d/pppd >/dev/null
+sudo visudo -c >/dev/null 2>&1 && echo "✅ Sudoers configured" || echo "⚠️  Sudoers validation failed"
+
 # --- ensure networking/DNS available before anything else ---
 echo "==> Checking internet connectivity..."
 TRIES=0
