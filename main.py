@@ -347,10 +347,7 @@ def create_config():
         "lan_bind_ip": lan_ip,
         "api": {"bind": "127.0.0.1", "port": 8088, "token": generate_token()},
         "proxy": {"auth_enabled": False, "user": "", "password": ""},
-        "modem": {
-            "port": "/dev/ttyUSB2",  # Default port, auto-detected
-            "timeout": 2
-        },
+        # Modem settings are auto-detected and configured by run.sh
         "rotation": {
             "ppp_teardown_wait": 60,  # Seconds to wait after killing old PPP connection (let carrier release old IP)
             "ppp_restart_wait": 30,   # Seconds to wait after starting new PPP connection (for new IP assignment)
@@ -380,14 +377,9 @@ def create_config():
         
         for key, value in existing.items():
             if key == "modem":
-                # Remove APN from modem config (handled by carriers.json)
-                # Preserve other modem settings like port/timeout if customized
-                if isinstance(value, dict) and key in result:
-                    result[key] = default[key].copy()
-                    # Preserve non-APN settings if they've been customized
-                    for subkey, subvalue in value.items():
-                        if subkey != "apn" and subkey in default[key]:
-                            result[key][subkey] = subvalue
+                # Remove modem section completely (handled by run.sh)
+                # Modem settings are auto-detected and configured
+                pass  # Don't preserve modem settings
             elif isinstance(value, dict) and key in result and isinstance(result[key], dict):
                 # Recursively merge other nested dictionaries
                 result[key] = smart_merge(value, result[key])
@@ -418,9 +410,9 @@ def create_config():
     preserved_settings = []
     
     for section, existing_value in existing_cfg.items():
-        if section == "modem" and "apn" in existing_value:
-            # APN is removed from config (handled by carriers.json)
-            reset_settings.append("modem.apn (moved to carriers.json)")
+        if section == "modem":
+            # Modem section is removed (handled by run.sh)
+            reset_settings.append("modem.* (handled by run.sh)")
         elif section in default_cfg and existing_value != default_cfg[section]:
             if isinstance(existing_value, dict):
                 # Check for meaningful differences in nested dicts

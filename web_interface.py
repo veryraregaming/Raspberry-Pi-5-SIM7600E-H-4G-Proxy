@@ -381,7 +381,7 @@ HTML_TEMPLATE = """
                 document.getElementById('api-url').textContent = `127.0.0.1:${data.api_port || '8088'}`;
                 
                 // Update configuration display
-                document.getElementById('config-apn').textContent = 'Auto-detected from carriers.json';
+                document.getElementById('config-apn').textContent = 'Auto-detected by run.sh';
                 
                 const rotation = data.rotation;
                 if (rotation) {
@@ -496,7 +496,7 @@ def api_config():
             'lan_ip': config.get('lan_bind_ip', 'Unknown'),
             'api_port': config.get('api', {}).get('port', 8088),
             'rotation': config.get('rotation', {}),
-            'modem': config.get('modem', {}),
+            # Modem settings are handled by run.sh, not config
             'proxy': {
                 'auth_enabled': config.get('proxy', {}).get('auth_enabled', False)
             },

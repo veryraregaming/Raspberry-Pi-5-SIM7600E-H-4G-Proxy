@@ -7,9 +7,7 @@ proxy:
   auth_enabled: false         # Set to true to enable proxy authentication
   user: "your-proxy-username"  # only used if auth_enabled: true
   password: "your-proxy-password"  # only used if auth_enabled: true
-modem:
-  port: "/dev/ttyUSB2"        # Modem port (auto-detected)
-  timeout: 2                  # AT command timeout in seconds
+# Modem settings are auto-detected and configured by run.sh
 
 rotation:
   ppp_teardown_wait: 60       # Seconds to wait after killing old PPP connection (let carrier release old IP)
