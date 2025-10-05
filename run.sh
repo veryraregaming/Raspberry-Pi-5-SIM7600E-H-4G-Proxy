@@ -10,6 +10,13 @@ pm2 delete 4g-proxy-auto-rotate 2>/dev/null || true
 pm2 kill 2>/dev/null || true
 echo "✅ Old PM2 processes cleaned up"
 
+# --- create state directory with proper permissions ---
+echo "==> Setting up state directory..."
+mkdir -p state
+chown -R $USER:$USER state 2>/dev/null || true
+chmod 755 state
+echo "✅ State directory created"
+
 # --- ensure networking/DNS available before anything else ---
 echo "==> Checking internet connectivity..."
 TRIES=0

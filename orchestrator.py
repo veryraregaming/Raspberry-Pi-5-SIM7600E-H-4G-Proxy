@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, time, requests, serial, yaml, json
+import os, time, requests, serial, yaml, json, subprocess
 from flask import Flask, request, jsonify, abort
 from datetime import datetime
 from pathlib import Path
@@ -239,14 +239,59 @@ def rotate():
     previous_ip = current_ip
     
     try:
-        # Perform rotation
+        # Perform rotation using PPP restart (more reliable than AT commands)
         print("Starting IP rotation...")
-        at('AT+CGACT=0,1'); time.sleep(2)
-        at('AT+CGACT=1,1'); time.sleep(4)
+        
+        # Kill existing PPP connection
+        subprocess.run(['sudo', 'pkill', 'pppd'], check=False)
+        time.sleep(3)
+        
+        # Restart PPP
+        result = subprocess.run(['sudo', 'pppd', 'call', 'ee'], 
+                              capture_output=True, text=True, timeout=30)
+        
+        if result.returncode != 0:
+            error_msg = f"PPP restart failed: {result.stderr}"
+            print(f"IP rotation failed: {error_msg}")
+            send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
+            return jsonify({
+                'status': 'failed',
+                'error': error_msg,
+                'public_ip': current_ip,
+                'previous_ip': previous_ip
+            }), 500
+        
+        # Wait for connection to establish
+        time.sleep(8)
+        
+        # Check if ppp0 is up
+        try:
+            result = subprocess.run(['ip', '-4', 'addr', 'show', 'ppp0'], 
+                                  capture_output=True, text=True)
+            if result.returncode != 0 or 'inet ' not in result.stdout:
+                error_msg = "ppp0 interface not up after restart"
+                print(f"IP rotation failed: {error_msg}")
+                send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
+                return jsonify({
+                    'status': 'failed',
+                    'error': error_msg,
+                    'public_ip': current_ip,
+                    'previous_ip': previous_ip
+                }), 500
+        except:
+            error_msg = "Could not check ppp0 status"
+            print(f"IP rotation failed: {error_msg}")
+            send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=error_msg)
+            return jsonify({
+                'status': 'failed',
+                'error': error_msg,
+                'public_ip': current_ip,
+                'previous_ip': previous_ip
+            }), 500
         
         # Get new IP
-        pdp = at('AT+CGPADDR')
         new_ip = get_current_ip()
+        pdp = at('AT+CGPADDR') if new_ip != "Unknown" else ""
         
         # Check if rotation was successful
         if new_ip == previous_ip or new_ip == "Unknown":

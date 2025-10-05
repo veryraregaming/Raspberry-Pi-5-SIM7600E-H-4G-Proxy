@@ -477,6 +477,13 @@ def create_pm2_ecosystem():
     current_user = os.environ.get('SUDO_USER') or os.environ.get('USER') or 'pi'
     print(f"  📝 PM2 will run as user: {current_user}")
     
+    # Create state directory with proper permissions
+    state_dir = os.path.join(script_dir, "state")
+    os.makedirs(state_dir, exist_ok=True)
+    run_cmd(f"chown -R {current_user}:{current_user} {state_dir}", check=False)
+    run_cmd(f"chmod 755 {state_dir}", check=False)
+    print(f"  📁 Created state directory: {state_dir}")
+    
     apps = [
         {
             "name": "4g-proxy-orchestrator",
