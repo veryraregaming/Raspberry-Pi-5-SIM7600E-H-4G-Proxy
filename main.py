@@ -452,13 +452,17 @@ def setup_network():
     if not activate_modem():
         print("  ⚠️ Modem activation failed, continuing anyway")
     
-    # Then setup network routing
-    out, err = run_cmd("bash ./scripts/4gproxy-net.sh", check=False)
-    if out: print(out)
-    if err and "ERROR" in err:
-        print(err)
-        return False
-    print("  ✅ Network policy set")
+    # Then setup simple routing via ppp0
+    print("  🔄 Setting up simple routing via ppp0...")
+    run_cmd("sudo ip route add default dev ppp0 metric 200", check=False)
+    print("  ✅ Simple routing via ppp0 configured")
+    
+    # Start Squid proxy
+    print("  🚀 Starting Squid proxy...")
+    run_cmd("sudo systemctl start squid", check=False)
+    run_cmd("sudo systemctl enable squid", check=False)
+    print("  ✅ Squid proxy started")
+    
     return True
 
 # ----------------- pm2 -----------------

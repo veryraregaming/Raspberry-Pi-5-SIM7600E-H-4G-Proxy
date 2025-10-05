@@ -194,12 +194,12 @@ if ! grep -q "^${REAL_USER} " "${SUDOERS_FILE}" 2>/dev/null; then
   chmod 440 "${SUDOERS_FILE}"
 fi
 
-# ---- Generate config + squid.conf + policy routing via Python --------------
+# ---- Generate config + squid.conf + simple PPP routing -------------------
 echo "==> Running main.py to setup config and network…"
 # main.py will:
 #  - auto-detect LAN IP, write config.yaml & squid.conf (no auth by default)
-#  - activate SIM7600E-H modem with direct AT commands
-#  - call ./scripts/4gproxy-net.sh (policy routing)
+#  - activate SIM7600E-H modem with PPP
+#  - setup simple routing via ppp0
 #  - write ecosystem.config.js
 python3 "${SCRIPT_DIR}/main.py" || true
 
