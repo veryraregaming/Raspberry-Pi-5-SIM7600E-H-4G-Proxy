@@ -295,6 +295,9 @@ HTML_TEMPLATE = """
                         <button class="button success" onclick="rotateIP()">🔄 Rotate IP</button>
                         <button class="button" onclick="sendNotification()">📱 Send Notification</button>
                         <button class="button" onclick="refreshData()">🔄 Refresh</button>
+                        <br><br>
+                        <button class="button" id="auto-rotation-toggle" onclick="toggleAutoRotation()">⚙️ Auto-rotation: Loading...</button>
+                        <button class="button" onclick="restartAutoRotation()">🔄 Restart Auto-rotation</button>
                     </div>
                 </div>
 
@@ -342,7 +345,8 @@ HTML_TEMPLATE = """
                 await Promise.all([
                     loadStatus(),
                     loadHistory(),
-                    loadConfig()
+                    loadConfig(),
+                    loadAutoRotationStatus()
                 ]);
                 document.getElementById('last-updated').textContent = new Date().toLocaleString();
             } catch (error) {
@@ -490,6 +494,54 @@ HTML_TEMPLATE = """
             showAlert('Data refreshed', 'success');
         }
         
+        async function loadAutoRotationStatus() {
+            try {
+                const response = await fetch('/api/auto-rotation/status');
+                const data = await response.json();
+                
+                const button = document.getElementById('auto-rotation-toggle');
+                if (data.enabled) {
+                    button.textContent = `⚙️ Auto-rotation: ON (${data.interval_minutes}m)`;
+                    button.className = 'button success';
+                } else {
+                    button.textContent = `⚙️ Auto-rotation: OFF (${data.interval_minutes}m)`;
+                    button.className = 'button';
+                }
+            } catch (error) {
+                console.error('Error loading auto-rotation status:', error);
+            }
+        }
+        
+        async function toggleAutoRotation() {
+            try {
+                const response = await fetch('/api/auto-rotation/status');
+                const data = await response.json();
+                
+                const endpoint = data.enabled ? '/api/auto-rotation/disable' : '/api/auto-rotation/enable';
+                const action = data.enabled ? 'disable' : 'enable';
+                
+                const result = await fetch(endpoint, { method: 'POST' });
+                const resultData = await result.json();
+                
+                showAlert(`Auto-rotation ${action}d`, 'success');
+                await loadAutoRotationStatus();
+            } catch (error) {
+                showAlert('Error toggling auto-rotation: ' + error.message, 'error');
+            }
+        }
+        
+        async function restartAutoRotation() {
+            try {
+                const result = await fetch('/api/auto-rotation/restart', { method: 'POST' });
+                const resultData = await result.json();
+                
+                showAlert('Auto-rotation restarted', 'success');
+                await loadAutoRotationStatus();
+            } catch (error) {
+                showAlert('Error restarting auto-rotation: ' + error.message, 'error');
+            }
+        }
+
         function showAlert(message, type) {
             const alert = document.getElementById('alert');
             alert.textContent = message;

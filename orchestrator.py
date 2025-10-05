@@ -381,6 +381,130 @@ def wait_for_ppp_up(timeout_s: int) -> bool:
 rotate_lock = threading.Lock()
 in_progress = False
 
+# ========= Auto-rotation timer =========
+auto_rotation_thread = None
+auto_rotation_stop_event = threading.Event()
+auto_rotation_enabled = True
+
+def auto_rotation_worker():
+    """Background thread that performs automatic IP rotation."""
+    global auto_rotation_enabled
+    
+    while not auto_rotation_stop_event.is_set():
+        try:
+            config = load_config()
+            interval = config.get('pm2', {}).get('ip_rotation_interval', 300)  # Default 5 minutes
+            
+            if auto_rotation_enabled and interval > 0:
+                print(f"Auto-rotation: Waiting {interval} seconds until next rotation...")
+                
+                # Wait for the interval, but check for stop event periodically
+                for _ in range(interval):
+                    if auto_rotation_stop_event.is_set():
+                        return
+                    time.sleep(1)
+                
+                if not auto_rotation_stop_event.is_set() and auto_rotation_enabled:
+                    print("Auto-rotation: Triggering scheduled IP rotation...")
+                    
+                    # Call the rotation function directly (bypass API auth)
+                    try:
+                        current_ip = get_current_ip()
+                        previous_ip = current_ip
+
+                        # Check if we have RNDIS interface available
+                        rndis_iface, rndis_has_ip = detect_rndis_interface()
+                        
+                        if rndis_iface:
+                            print(f"Auto-rotation: Using RNDIS interface: {rndis_iface}")
+                            rotation_config = config.get('rotation', {}) or {}
+                            teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
+                            restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
+                            max_attempts  = int(rotation_config.get('max_attempts', 2))
+
+                            for attempt in range(max_attempts):
+                                print(f"Auto-rotation: RNDIS Rotation Attempt {attempt + 1}/{max_attempts}")
+                                teardown_rndis(teardown_wait)
+
+                                try:
+                                    start_rndis()
+                                except Exception as e:
+                                    print(f"Auto-rotation: RNDIS restart failed on attempt {attempt + 1}: {e}")
+                                    if attempt == max_attempts - 1:
+                                        err = f"RNDIS restart failed after {max_attempts} attempts"
+                                        print(f"Auto-rotation failed: {err}")
+                                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                                        continue
+                                    continue
+
+                                if not wait_for_rndis_up(restart_wait):
+                                    print(f"Auto-rotation: RNDIS interface did not come up within {restart_wait} seconds")
+                                    if attempt == max_attempts - 1:
+                                        err = f"RNDIS interface failed to get IP after {max_attempts} attempts"
+                                        print(f"Auto-rotation failed: {err}")
+                                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                                        continue
+                                    continue
+
+                                # Check if IP changed
+                                time.sleep(5)  # Give it a moment to stabilize
+                                new_ip = get_current_ip()
+                                if new_ip != previous_ip and new_ip != "Unknown":
+                                    print(f"✅ Auto-rotation successful: {previous_ip} -> {new_ip}")
+                                    send_discord_notification(new_ip, previous_ip, is_rotation=True)
+                                    break
+                                else:
+                                    print(f"Auto-rotation: IP unchanged on attempt {attempt + 1}: {new_ip} (was {previous_ip})")
+                                    if attempt < max_attempts - 1:
+                                        continue
+                                    err = f"IP did not change after {max_attempts} attempts"
+                                    print(f"Auto-rotation failed: {err}")
+                                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                        else:
+                            print("Auto-rotation: No RNDIS interface found, skipping rotation")
+                            
+                    except Exception as e:
+                        err = f"Auto-rotation failed: {str(e)}"
+                        print(f"Auto-rotation error: {err}")
+                        try:
+                            current_ip = get_current_ip()
+                        except Exception:
+                            current_ip = "Unknown"
+                        send_discord_notification(current_ip, None, is_rotation=False, is_failure=True, error_message=err)
+            else:
+                # If disabled or interval is 0, wait longer and check again
+                time.sleep(60)
+                
+        except Exception as e:
+            print(f"Auto-rotation worker error: {e}")
+            time.sleep(60)  # Wait before retrying
+
+def start_auto_rotation():
+    """Start the auto-rotation background thread."""
+    global auto_rotation_thread, auto_rotation_stop_event
+    
+    if auto_rotation_thread is None or not auto_rotation_thread.is_alive():
+        auto_rotation_stop_event.clear()
+        auto_rotation_thread = threading.Thread(target=auto_rotation_worker, daemon=True)
+        auto_rotation_thread.start()
+        print("✅ Auto-rotation thread started")
+
+def stop_auto_rotation():
+    """Stop the auto-rotation background thread."""
+    global auto_rotation_thread, auto_rotation_stop_event
+    
+    if auto_rotation_thread and auto_rotation_thread.is_alive():
+        auto_rotation_stop_event.set()
+        auto_rotation_thread.join(timeout=5)
+        print("✅ Auto-rotation thread stopped")
+
+def set_auto_rotation_enabled(enabled):
+    """Enable or disable auto-rotation."""
+    global auto_rotation_enabled
+    auto_rotation_enabled = enabled
+    status = "enabled" if enabled else "disabled"
+    print(f"Auto-rotation {status}")
+
 # ========= API =========
 
 @app.get('/status')
@@ -648,6 +772,57 @@ def test_failure():
     send_discord_notification(current_ip, is_rotation=False, is_failure=True, error_message=error_msg)
     return jsonify({'status': 'failure_notification_sent', 'ip': current_ip, 'error': error_msg})
 
+@app.get('/auto-rotation/status')
+def auto_rotation_status():
+    """Get auto-rotation status and settings."""
+    config = load_config()
+    interval = config.get('pm2', {}).get('ip_rotation_interval', 300)
+    
+    return jsonify({
+        'enabled': auto_rotation_enabled,
+        'interval_seconds': interval,
+        'interval_minutes': interval // 60,
+        'thread_alive': auto_rotation_thread and auto_rotation_thread.is_alive()
+    })
+
+@app.post('/auto-rotation/enable')
+def auto_rotation_enable():
+    """Enable auto-rotation."""
+    config = load_config()
+    expected = config['api']['token']
+    token = request.headers.get('Authorization', '')
+    if expected not in token:
+        abort(403)
+    
+    set_auto_rotation_enabled(True)
+    return jsonify({'status': 'enabled', 'message': 'Auto-rotation enabled'})
+
+@app.post('/auto-rotation/disable')
+def auto_rotation_disable():
+    """Disable auto-rotation."""
+    config = load_config()
+    expected = config['api']['token']
+    token = request.headers.get('Authorization', '')
+    if expected not in token:
+        abort(403)
+    
+    set_auto_rotation_enabled(False)
+    return jsonify({'status': 'disabled', 'message': 'Auto-rotation disabled'})
+
+@app.post('/auto-rotation/restart')
+def auto_rotation_restart():
+    """Restart auto-rotation thread."""
+    config = load_config()
+    expected = config['api']['token']
+    token = request.headers.get('Authorization', '')
+    if expected not in token:
+        abort(403)
+    
+    stop_auto_rotation()
+    time.sleep(1)
+    start_auto_rotation()
+    return jsonify({'status': 'restarted', 'message': 'Auto-rotation thread restarted'})
+
 if __name__ == '__main__':
     config = load_config()
     lan_ip = config['lan_bind_ip']
@@ -670,6 +845,11 @@ if __name__ == '__main__':
     print("📢 Send Notification: POST http://127.0.0.1:8088/notify")
     print("📋 IP History: GET http://127.0.0.1:8088/history")
     print("🧪 Test Failure: POST http://127.0.0.1:8088/test-failure")
+    print("⚙️ Auto-rotation Control:")
+    print("   Status: GET http://127.0.0.1:8088/auto-rotation/status")
+    print("   Enable: POST http://127.0.0.1:8088/auto-rotation/enable")
+    print("   Disable: POST http://127.0.0.1:8088/auto-rotation/disable")
+    print("   Restart: POST http://127.0.0.1:8088/auto-rotation/restart")
 
     webhook_url = config.get('discord', {}).get('webhook_url', '').strip()
     if webhook_url and webhook_url != "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN":
@@ -678,6 +858,12 @@ if __name__ == '__main__':
         send_discord_notification(current_ip, is_rotation=True)
     else:
         print("📱 Discord notifications: Not configured")
+    
+    # Start auto-rotation
+    interval = config.get('pm2', {}).get('ip_rotation_interval', 300)
+    print(f"🔄 Auto-rotation: Starting with {interval//60} minute intervals")
+    start_auto_rotation()
+    
     print("="*60)
 
     app.run(host=config['api']['bind'], port=config['api']['port'])
