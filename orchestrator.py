@@ -285,7 +285,76 @@ def send_discord_notification(current_ip, previous_ip=None, is_rotation=False, i
         print(f"Failed to send Discord notification: {e}")
         return False
 
-# ========= PPP helpers =========
+# ========= RNDIS helpers =========
+
+def detect_rndis_interface():
+    """Detect RNDIS interface (enx*) that provides cellular connectivity."""
+    try:
+        out, _, _ = subprocess.run([IP_PATH, "-br", "link", "show"], 
+                                  capture_output=True, text=True, check=False)
+        for line in out.splitlines():
+            if line.startswith("enx") or line.startswith("eth1"):
+                parts = line.split()
+                iface = parts[0]
+                # Check if interface has an IP address
+                ip_out, _, _ = subprocess.run([IP_PATH, "-4", "addr", "show", iface],
+                                             capture_output=True, text=True, check=False)
+                if "inet " in ip_out:
+                    return iface, True
+                else:
+                    return iface, False
+    except Exception:
+        pass
+    return None, False
+
+def teardown_rndis(wait_s: int):
+    """Teardown RNDIS interface by bringing it down."""
+    iface, _ = detect_rndis_interface()
+    if iface:
+        print(f"Bringing down RNDIS interface: {iface}")
+        subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "down"], 
+                      check=False)
+        print(f"Waiting {wait_s} seconds for RNDIS teardown...")
+        time.sleep(max(1, int(wait_s)))
+    else:
+        print("No RNDIS interface found, skipping teardown")
+
+def start_rndis():
+    """Start RNDIS interface by bringing it up and getting DHCP."""
+    iface, has_ip = detect_rndis_interface()
+    if not iface:
+        raise RuntimeError("No RNDIS interface found")
+    
+    print(f"Bringing up RNDIS interface: {iface}")
+    # Bring interface up
+    res = subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "up"],
+                        capture_output=True, text=True, check=False)
+    if res.returncode != 0:
+        raise RuntimeError(f"Failed to bring up {iface}: {res.stderr.strip()}")
+    
+    time.sleep(2)
+    
+    # Get IP via DHCP
+    print(f"Getting IP via DHCP for {iface}...")
+    res = subprocess.run([SUDO_PATH, "-n", "dhclient", "-v", iface],
+                        capture_output=True, text=True, timeout=30, check=False)
+    
+    if res.returncode != 0:
+        raise RuntimeError(f"DHCP failed for {iface}: {res.stderr.strip()}")
+    
+    return iface
+
+def wait_for_rndis_up(timeout_s: int) -> bool:
+    """Wait for RNDIS interface to get an IP address."""
+    deadline = time.time() + max(5, int(timeout_s))
+    while time.time() < deadline:
+        iface, has_ip = detect_rndis_interface()
+        if iface and has_ip:
+            return True
+        time.sleep(2)
+    return False
+
+# ========= PPP helpers (fallback) =========
 
 def teardown_ppp(wait_s: int):
     subprocess.run([SUDO_PATH, "-n", PKILL_PATH, "pppd"], check=False)
@@ -344,67 +413,135 @@ def rotate():
 
         print("Starting IP rotation...")
 
-        rotation_config = config.get('rotation', {}) or {}
-        teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
-        restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
-        max_attempts  = int(rotation_config.get('max_attempts', 2))
+        # Check if we have RNDIS interface available
+        rndis_iface, rndis_has_ip = detect_rndis_interface()
+        
+        if rndis_iface:
+            print(f"Using RNDIS interface: {rndis_iface}")
+            rotation_config = config.get('rotation', {}) or {}
+            teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
+            restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
+            max_attempts  = int(rotation_config.get('max_attempts', 2))
 
-        deep_enabled = rotation_config.get('deep_reset_enabled', False)
-        deep_method  = (rotation_config.get('deep_reset_method', 'mmcli') or 'mmcli').lower()
-        if 'deep_reset' in rotation_config:  # backward compat
-            old = (rotation_config.get('deep_reset', '') or '').lower()
-            if old in ('mmcli', 'at'):
-                deep_enabled, deep_method = True, old
-            elif old in ('off', ''):
-                deep_enabled = False
-        deep_wait = int(rotation_config.get('deep_reset_wait', 180))
+            print(f"RNDIS rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, max_attempts={max_attempts}")
 
-        print(f"Rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, "
-              f"max_attempts={max_attempts}, deep_reset={'enabled' if deep_enabled else 'disabled'} ({deep_method}, {deep_wait}s)")
+            for attempt in range(max_attempts):
+                print(f"\n--- RNDIS Rotation Attempt {attempt + 1}/{max_attempts} ---")
+                teardown_rndis(teardown_wait)
 
-        for attempt in range(max_attempts):
-            print(f"\n--- Rotation Attempt {attempt + 1}/{max_attempts} ---")
-            teardown_ppp(teardown_wait)
+                try:
+                    start_rndis()
+                except Exception as e:
+                    print(f"RNDIS restart failed on attempt {attempt + 1}: {e}")
+                    if attempt == max_attempts - 1:
+                        err = f"RNDIS restart failed after {max_attempts} attempts"
+                        print(f"IP rotation failed: {err}")
+                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                        return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                    continue
 
-            if attempt == 0:
-                print("Attempt 1: Simple PPP restart")
-            else:
-                if deep_enabled:
-                    print(f"Attempt {attempt + 1}: Deep reset ({deep_method}) before PPP")
-                    deep_reset_modem(deep_method, deep_wait)
-                    print("Waiting up to 15s for modem ports to re-enumerate…")
-                    t0 = time.time()
-                    while time.time() - t0 < 15:
-                        if any(n.startswith("ttyUSB") for n in os.listdir("/dev")):
-                            break
-                        time.sleep(1)
+                total_wait = restart_wait
+                print(f"Waiting {total_wait} seconds for new IP assignment...")
+                if not wait_for_rndis_up(total_wait):
+                    print(f"RNDIS interface did not come up within {total_wait} seconds")
+                    if attempt == max_attempts - 1:
+                        err = f"RNDIS interface failed to get IP after {max_attempts} attempts"
+                        print(f"IP rotation failed: {err}")
+                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                        return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                    continue
+
+                # Check if IP changed
+                time.sleep(5)  # Give it a moment to stabilize
+                new_ip = get_current_ip()
+                if new_ip != previous_ip and new_ip != "Unknown":
+                    print(f"✅ IP rotation successful on attempt {attempt + 1}: {previous_ip} -> {new_ip}")
+                    send_discord_notification(new_ip, previous_ip, is_rotation=True)
+                    return jsonify({
+                        'status': 'success',
+                        'public_ip': new_ip,
+                        'previous_ip': previous_ip,
+                        'attempts': attempt + 1
+                    })
                 else:
-                    print(f"Attempt {attempt + 1}: Deep reset disabled; trying PPP restart again")
-
-            try:
-                start_ppp()
-            except Exception as e:
-                print(f"PPP restart failed on attempt {attempt + 1}: {e}")
-                if attempt == max_attempts - 1:
-                    err = f"PPP restart failed after {max_attempts} attempts"
+                    print(f"IP unchanged on attempt {attempt + 1}: {new_ip} (was {previous_ip})")
+                    if attempt < max_attempts - 1:
+                        print("Trying next attempt...")
+                        continue
+                    err = f"IP did not change after {max_attempts} attempts"
                     print(f"IP rotation failed: {err}")
-                    send_discord_notification(current_ip, prev_ipv4, is_rotation=False, is_failure=True, error_message=err)
-                    return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':prev_ipv4}), 500
-                continue
+                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                    return jsonify({
+                        'status': 'failed',
+                        'error': err,
+                        'public_ip': new_ip,
+                        'previous_ip': previous_ip,
+                        'attempts': max_attempts
+                    }), 400
+        else:
+            # Fallback to PPP rotation
+            print("No RNDIS interface found, using PPP fallback")
+            rotation_config = config.get('rotation', {}) or {}
+            teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
+            restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
+            max_attempts  = int(rotation_config.get('max_attempts', 2))
 
-            extra = 0
-            if attempt > 0:
-                extra = max(30, restart_wait)
-            total_wait = restart_wait + extra
-            print(f"Waiting {total_wait} seconds for new IP assignment...")
-            if not wait_for_ppp_up(total_wait):
-                print(f"ppp0 interface not up after attempt {attempt + 1}")
-                if attempt == max_attempts - 1:
-                    err = "ppp0 interface not up after restart"
-                    print(f"IP rotation failed: {err}")
-                    send_discord_notification(current_ip, prev_ipv4, is_rotation=False, is_failure=True, error_message=err)
-                    return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':prev_ipv4}), 500
-                continue
+            deep_enabled = rotation_config.get('deep_reset_enabled', False)
+            deep_method  = (rotation_config.get('deep_reset_method', 'mmcli') or 'mmcli').lower()
+            if 'deep_reset' in rotation_config:  # backward compat
+                old = (rotation_config.get('deep_reset', '') or '').lower()
+                if old in ('mmcli', 'at'):
+                    deep_enabled, deep_method = True, old
+                elif old in ('off', ''):
+                    deep_enabled = False
+            deep_wait = int(rotation_config.get('deep_reset_wait', 180))
+
+            print(f"PPP rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, "
+                  f"max_attempts={max_attempts}, deep_reset={'enabled' if deep_enabled else 'disabled'} ({deep_method}, {deep_wait}s)")
+
+            for attempt in range(max_attempts):
+                print(f"\n--- PPP Rotation Attempt {attempt + 1}/{max_attempts} ---")
+                teardown_ppp(teardown_wait)
+
+                if attempt == 0:
+                    print("Attempt 1: Simple PPP restart")
+                else:
+                    if deep_enabled:
+                        print(f"Attempt {attempt + 1}: Deep reset ({deep_method}) before PPP")
+                        deep_reset_modem(deep_method, deep_wait)
+                        print("Waiting up to 15s for modem ports to re-enumerate…")
+                        t0 = time.time()
+                        while time.time() - t0 < 15:
+                            if any(n.startswith("ttyUSB") for n in os.listdir("/dev")):
+                                break
+                            time.sleep(1)
+                    else:
+                        print(f"Attempt {attempt + 1}: Deep reset disabled; trying PPP restart again")
+
+                try:
+                    start_ppp()
+                except Exception as e:
+                    print(f"PPP restart failed on attempt {attempt + 1}: {e}")
+                    if attempt == max_attempts - 1:
+                        err = f"PPP restart failed after {max_attempts} attempts"
+                        print(f"IP rotation failed: {err}")
+                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                        return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                    continue
+
+                extra = 0
+                if attempt > 0:
+                    extra = max(30, restart_wait)
+                total_wait = restart_wait + extra
+                print(f"Waiting {total_wait} seconds for new IP assignment...")
+                if not wait_for_ppp_up(total_wait):
+                    print(f"ppp0 interface not up after attempt {attempt + 1}")
+                    if attempt == max_attempts - 1:
+                        err = "ppp0 interface not up after restart"
+                        print(f"IP rotation failed: {err}")
+                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                        return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                    continue
 
             print("Fixing routing to prefer primary and keep PPP as secondary...")
             ensure_ppp_default_route()
