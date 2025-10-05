@@ -379,6 +379,11 @@ def summary(cfg: dict):
     print(f"  curl -s https://api.ipify.org && echo")
     print(f"  curl -x http://{lan_ip}:3128 -s https://api.ipify.org && echo")
     print(f"  curl -x http://[::1]:3128 -s https://api6.ipify.org && echo  # IPv6 test")
+    print("")
+    print("💡 Common LAN IP examples (replace with your actual IP):")
+    print(f"  curl -x http://192.168.1.37:3128 -s https://api.ipify.org && echo")
+    print(f"  curl -x http://10.0.0.50:3128 -s https://api.ipify.org && echo")
+    print(f"  curl -x http://172.16.0.100:3128 -s https://api.ipify.org && echo")
     print("=" * 60)
 
 def main():
