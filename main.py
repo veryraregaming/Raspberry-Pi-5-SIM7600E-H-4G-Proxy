@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Raspberry Pi 5 + SIM7600E-H 4G Proxy - Auto Setup (safe routing version)
+Raspberry Pi 5 + SIM7600E-H 4G Proxy - Auto Setup (safe routing)
 - Leaves system default route intact (eth0/wlan0 remain primary)
-- Adds ppp0 as a LOWER-PRIORITY default (higher metric)
+- Adds ppp0 as LOWER-PRIORITY default (higher metric)
 - Idempotently writes: config.yaml, squid.conf, ecosystem.config.js
 - Creates correct PPP chat/peer files for APN dialing
-- Does NOT start/enable services (PM2/systemd) — run.sh handles that
+- Does NOT start/enable PM2/systemd; run.sh handles that
 """
 
 import os
@@ -28,12 +28,7 @@ BASE = Path(__file__).resolve().parent
 # ---------- shell helpers ----------
 
 def run_cmd(cmd, check=False, shell=False, timeout=None):
-    """
-    Run a command. `cmd` can be a str (shell=True) or list (shell=False).
-    Returns (stdout, stderr, returncode).
-    """
     if isinstance(cmd, str) and not shell:
-        # if given string but want no shell, split safely
         cmd = shlex.split(cmd)
     try:
         cp = subprocess.run(
@@ -48,7 +43,6 @@ def which(path, default=None):
     out, _, _ = run_cmd(["which", path])
     return out or default or path
 
-# Absolute paths used in routing / ppp steps (informational)
 IP_PATH = which("ip", "/usr/sbin/ip")
 PPPD_PATH = which("pppd", "/usr/sbin/pppd")
 CHAT_PATH = which("chat", "/usr/sbin/chat")
@@ -56,15 +50,14 @@ SYSTEMCTL_PATH = which("systemctl", "/bin/systemctl")
 
 # ---------- IP helpers ----------
 
-def detect_ipv4(iface: str) -> str | None:
+def detect_ipv4(iface: str):
     out, _, rc = run_cmd([IP_PATH, "-4", "addr", "show", iface])
     if rc != 0:
         return None
     m = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)/\d+", out)
     return m.group(1) if m else None
 
-def detect_lan_ip() -> str:
-    # Prefer wlan0, then eth0, else outbound guess, else localhost
+def detect_lan_ip():
     for iface in ("wlan0", "eth0"):
         ip = detect_ipv4(iface)
         if ip:
@@ -80,15 +73,11 @@ def detect_lan_ip() -> str:
 
 # ---------- modem / PPP ----------
 
-def detect_modem_port() -> str:
-    """
-    Try common SIM7600 AT ports; verify with simple "AT" probe.
-    """
+def detect_modem_port():
     candidates = [
         "/dev/ttyUSB2", "/dev/ttyUSB1", "/dev/ttyUSB0",
         "/dev/ttyUSB3", "/dev/ttyUSB4"
     ]
-    # append any other ttyUSB seen
     try:
         for dev in os.listdir("/dev"):
             if dev.startswith("ttyUSB"):
@@ -111,11 +100,9 @@ def detect_modem_port() -> str:
                     return port
         except Exception:
             continue
-
-    # fallback
     return "/dev/ttyUSB2"
 
-def send_at_command(cmd: str, port: str, timeout=2) -> str:
+def send_at_command(cmd: str, port: str, timeout=2):
     try:
         with serial.Serial(port, 115200, timeout=timeout) as ser:
             ser.write((cmd + "\r\n").encode())
@@ -126,27 +113,15 @@ def send_at_command(cmd: str, port: str, timeout=2) -> str:
         return ""
 
 def load_carrier_config(apn: str) -> dict:
-    """
-    Load carriers.json and pick the one matching APN; else fall back to EE.
-    carriers.json expected structure:
-    {
-      "carriers": {
-        "ee": {"name": "...", "apn": "everywhere", "username": "...", "password": "...", "ip_type": "ipv4"},
-        ...
-      }
-    }
-    """
     try:
         data = json.loads((BASE / "carriers.json").read_text(encoding="utf-8"))
         for _, info in data.get("carriers", {}).items():
             if str(info.get("apn", "")).strip() == apn:
                 return info
-        # default to "ee" if present
         if "ee" in data.get("carriers", {}):
             return data["carriers"]["ee"]
     except Exception:
         pass
-    # final fallback (EE)
     return {
         "name": "EE Internet",
         "apn": "everywhere",
@@ -156,20 +131,13 @@ def load_carrier_config(apn: str) -> dict:
     }
 
 def create_ppp_config(apn: str, at_port: str):
-    """
-    Create PPP chat/peer files (idempotent) for dialing *99# with APN.
-    """
     chat_file = "/etc/chatscripts/ee-chat"
     peer_file = "/etc/ppp/peers/ee"
     log_file = "/var/log/ppp-ee.log"
 
-    # Ensure dirs
     run_cmd(["sudo", "mkdir", "-p", "/etc/chatscripts"], check=False)
     run_cmd(["sudo", "mkdir", "-p", "/etc/ppp/peers"], check=False)
 
-    # A correct, minimal chatscript:
-    # - empty expect ("") then send AT
-    # - on OK continue, set APN PDP context, then dial *99#
     chat_script = f"""ABORT 'BUSY'
 ABORT 'NO CARRIER'
 ABORT 'ERROR'
@@ -187,12 +155,10 @@ OK ATD*99#
 CONNECT ''
 """
 
-    tmp_chat = BASE / "ee-chat.tmp"
-    tmp_chat.write_text(chat_script, encoding="utf-8")
-    run_cmd(["sudo", "cp", str(tmp_chat), chat_file], check=False)
+    (BASE / "ee-chat.tmp").write_text(chat_script, encoding="utf-8")
+    run_cmd(["sudo", "cp", str(BASE / "ee-chat.tmp"), chat_file], check=False)
     run_cmd(["sudo", "chmod", "644", chat_file], check=False)
 
-    # Peer file — first line must be the TTY device path
     peer_config = f"""{at_port}
 115200
 crtscts
@@ -210,48 +176,36 @@ debug
 logfile {log_file}
 connect "{CHAT_PATH} -v -f {chat_file}"
 """
-
-    tmp_peer = BASE / "ee-peer.tmp"
-    tmp_peer.write_text(peer_config, encoding="utf-8")
-    run_cmd(["sudo", "cp", str(tmp_peer), peer_file], check=False)
+    (BASE / "ee-peer.tmp").write_text(peer_config, encoding="utf-8")
+    run_cmd(["sudo", "cp", str(BASE / "ee-peer.tmp"), peer_file], check=False)
     run_cmd(["sudo", "chmod", "644", peer_file], check=False)
 
 def activate_modem_via_ppp(apn: str) -> bool:
-    """
-    Kill conflicts, ensure ppp installed, create configs, start pppd call ee,
-    wait for ppp0 to receive IPv4.
-    """
     print("📡 Activating SIM7600E-H modem over PPP…")
     carrier = load_carrier_config(apn)
     print(f"  📡 Using APN: {carrier['apn']} ({carrier['name']})")
 
-    # Stop conflicts
     print("  🔄 Stopping conflicts (ModemManager, lingering pppd)…")
     run_cmd([SYSTEMCTL_PATH, "stop", "ModemManager"], check=False)
     run_cmd(["sudo", "pkill", "pppd"], check=False)
     time.sleep(1.5)
 
-    # Install PPP if needed
     print("  📦 Ensuring ppp is installed…")
     run_cmd(["sudo", "apt-get", "update", "-y"], check=False)
     run_cmd(["sudo", "apt-get", "install", "-y", "ppp"], check=False)
 
-    # Detect AT port
     print("  🔍 Detecting AT port…")
     at_port = detect_modem_port()
     print(f"  📡 Using AT port: {at_port}")
 
-    # Write PPP config
     print("  🔧 Writing PPP chat/peer files…")
     create_ppp_config(carrier["apn"], at_port)
 
-    # Start PPP
     print("  🚀 Starting PPP session (pppd call ee)…")
     out, err, rc = run_cmd(["sudo", PPPD_PATH, "call", "ee"], check=False, timeout=30)
     if rc != 0 and err:
         print(f"  ⚠️ pppd error: {err}")
 
-    # Wait up to ~30s for ppp0 with IPv4
     print("  ⏳ Waiting for ppp0 IPv4…")
     for _ in range(30):
         time.sleep(1)
@@ -259,19 +213,14 @@ def activate_modem_via_ppp(apn: str) -> bool:
         if "inet " in out:
             print("  ✅ ppp0 is UP with IPv4")
             return True
-
     print("  ❌ ppp0 did not come up in time.")
     return False
 
 def keep_primary_and_add_ppp_secondary():
-    """
-    Ensure the current default (wifi/eth) stays primary; add ppp0 as secondary (metric +500).
-    """
     try:
         out, _, _ = run_cmd([IP_PATH, "route", "show", "default"], check=False)
         if not out:
             return
-        # Parse first default line
         line = out.splitlines()[0]
         parts = line.split()
         gw = dev = None
@@ -287,7 +236,7 @@ def keep_primary_and_add_ppp_secondary():
                 except Exception:
                     pass
         if dev and dev != "ppp0":
-            print(f"  🔄 Keeping {dev} as primary default (metric {metric}); adding ppp0 as secondary")
+            print(f"  🔄 Keeping {dev} primary (metric {metric}); adding ppp0 secondary…")
             run_cmd(["sudo", IP_PATH, "route", "replace", "default", "via", gw, "dev", dev, "metric", str(metric)], check=False)
             run_cmd(["sudo", IP_PATH, "route", "add", "default", "dev", "ppp0", "metric", str(metric + 500)], check=False)
             print("  ✅ Primary preserved; ppp0 secondary added")
@@ -314,18 +263,17 @@ def write_config_yaml():
         "api": {"bind": "127.0.0.1", "port": 8088, "token": make_token()},
         "proxy": {"auth_enabled": False, "user": "", "password": ""},
         "rotation": {
-            "ppp_teardown_wait": 30,    # seconds to wait after killing PPP
-            "ppp_restart_wait": 60,     # seconds to wait for new IP after PPP start
-            "max_attempts": 2,          # try simple restart first, then escalate
-            "deep_reset_enabled": False, # true=enables deep reset, false=fast rotation only
-            "deep_reset_method": "mmcli", # "mmcli" or "at" (only used if enabled)
-            "deep_reset_wait": 180      # seconds to hold modem offline for CGNAT escape
+            "ppp_teardown_wait": 30,
+            "ppp_restart_wait": 60,
+            "max_attempts": 2,
+            "deep_reset_enabled": False,
+            "deep_reset_method": "mmcli",
+            "deep_reset_wait": 180
         },
         "pm2": {"enabled": True, "auto_restart": True, "ip_rotation_interval": 300, "max_restarts": 10, "restart_delay": 5000},
-        "discord": {"webhook_url": ""},  # set if you want notifications
+        "discord": {"webhook_url": ""},
     }
 
-    # Merge (existing overrides defaults)
     merged = defaults.copy()
     for k, v in existing.items():
         if isinstance(v, dict) and isinstance(merged.get(k), dict):
@@ -394,9 +342,6 @@ dns_nameservers 8.8.8.8 1.1.1.1
     print("  ✅ squid.conf ready")
 
 def write_ecosystem():
-    """
-    PM2 config: ONLY orchestrator.py. (run.sh will start pm2 with this file)
-    """
     eco = BASE / "ecosystem.config.js"
     content = f"""module.exports = {{
   apps: [
@@ -464,33 +409,19 @@ def main():
 
     print("🚀 Raspberry Pi 5 + SIM7600E-H 4G Proxy (safe policy-routing)")
 
-    # 1) Write configs
     cfg = write_config_yaml()
     write_squid_conf(cfg)
     write_ecosystem()
 
-    # 2) Activate modem over PPP
-    apn = "everywhere"
-    try:
-        apn = (cfg.get("modem") or {}).get("apn", "everywhere")
-    except Exception:
-        pass
+    apn = (cfg.get("modem") or {}).get("apn", "everywhere") if isinstance(cfg.get("modem"), dict) else "everywhere"
 
     ok = activate_modem_via_ppp(apn)
     if not ok:
         print("⚠️ PPP activation did not bring up ppp0; continuing (check logs)")
 
-    # 3) Keep primary default (wifi/eth) and add ppp0 as secondary default
     keep_primary_and_add_ppp_secondary()
-
-    # 4) Quick proxy test
     proxy_test(cfg["lan_bind_ip"])
-
-    # 5) Summary
     summary(cfg)
-
-    # NOTE: DO NOT start PM2 here; run.sh handles PM2 start/save/startup.
-
     return 0
 
 if __name__ == "__main__":
