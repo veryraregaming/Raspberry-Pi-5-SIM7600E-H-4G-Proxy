@@ -185,14 +185,42 @@ def ensure_ppp_default_route():
         print(f"Warning: Could not fix routing: {e}")
 
 def get_current_ip():
-    """Get current public IPv4 address."""
+    """Get current public IPv4 address via cellular interface only."""
+    # Check if RNDIS interface is up
+    rndis_iface, has_ip = detect_rndis_interface()
+    
+    # If RNDIS is down or has no IP, check for PPP
+    if not (rndis_iface and has_ip):
+        try:
+            r = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"], 
+                             capture_output=True, text=True, timeout=3)
+            if r.returncode != 0 or "inet " not in r.stdout:
+                # Neither RNDIS nor PPP is up
+                return "Unknown"
+        except Exception:
+            return "Unknown"
+    
+    # Cellular interface is up, check public IP via proxy
     try:
-        r = requests.get('https://ipv4.icanhazip.com', timeout=10)
+        # Use proxy to ensure we're checking cellular IP, not WiFi
+        # This forces the request through Squid which routes via cellular
+        config = load_config()
+        lan_ip = config.get('lan_bind_ip', '127.0.0.1')
+        proxies = {
+            'http': f'http://{lan_ip}:3128',
+            'https': f'http://{lan_ip}:3128'
+        }
+        r = requests.get('https://api.ipify.org', proxies=proxies, timeout=10)
         return r.text.strip()
     except Exception:
+        # Fallback: direct check (may use WiFi if cellular is down)
         try:
             r = requests.get('https://api.ipify.org', timeout=10)
-            return r.text.strip()
+            ip = r.text.strip()
+            # Verify this isn't a private IP (WiFi)
+            if ip.startswith('192.168.') or ip.startswith('10.') or ip.startswith('172.'):
+                return "Unknown"
+            return ip
         except Exception:
             return "Unknown"
 
