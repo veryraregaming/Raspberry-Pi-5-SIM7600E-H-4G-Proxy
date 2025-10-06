@@ -204,6 +204,12 @@ def ensure_ppp_default_route():
 
 def get_current_ip():
     """Get current public IPv4 address via cellular interface only."""
+    global in_progress
+    
+    # If rotation is in progress, return "Rotating..." to avoid showing WiFi IP
+    if in_progress:
+        return "Rotating..."
+    
     # Check if RNDIS interface is up
     rndis_iface, has_ip = detect_rndis_interface()
     
@@ -229,18 +235,16 @@ def get_current_ip():
             'https': f'http://{lan_ip}:3128'
         }
         r = requests.get('https://api.ipify.org', proxies=proxies, timeout=10)
-        return r.text.strip()
-    except Exception:
-        # Fallback: direct check (may use WiFi if cellular is down)
-        try:
-            r = requests.get('https://api.ipify.org', timeout=10)
-            ip = r.text.strip()
-            # Verify this isn't a private IP (WiFi)
-            if ip.startswith('192.168.') or ip.startswith('10.') or ip.startswith('172.'):
-                return "Unknown"
-            return ip
-        except Exception:
+        ip = r.text.strip()
+        
+        # Verify this is a public IP (not private/home network)
+        if ip.startswith('192.168.') or ip.startswith('10.') or ip.startswith('172.') or ip.startswith('86.151.'):
             return "Unknown"
+        
+        return ip
+    except Exception:
+        # If proxy fails, return Unknown (don't fallback to WiFi)
+        return "Unknown"
 
 # ========= Discord =========
 
