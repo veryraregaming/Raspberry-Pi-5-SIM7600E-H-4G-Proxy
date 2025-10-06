@@ -58,6 +58,52 @@ sudo ./run.sh
 ### **Adding New Carriers:**
 See [CARRIER_SETUP.md](CARRIER_SETUP.md) for detailed instructions on adding support for new carriers and networks worldwide.
 
+## 🔄 Changing SIM Cards
+
+### **Safe SIM Card Swap Procedure**
+
+The system supports hot-swapping SIM cards, but the safest method is:
+
+1. **Power down the Pi**:
+   ```bash
+   sudo shutdown -h now
+   ```
+
+2. **Wait for complete shutdown** (all LEDs off)
+
+3. **Remove old SIM, insert new SIM**
+
+4. **Power on the Pi**
+
+5. **SSH back in and run setup**:
+   ```bash
+   cd ~/Raspberry-Pi-5-SIM7600E-H-4G-Proxy
+   git pull
+   sudo ./run.sh
+   ```
+
+### **What Happens Automatically**:
+- ✅ New carrier detected (e.g., EE → Three UK)
+- ✅ Correct APN configured from carriers.json
+- ✅ RNDIS interface reinitialized
+- ✅ Auto-rotation continues with new carrier
+- ✅ Discord notifications resume with new IPs
+- ✅ No manual configuration needed
+
+### **Hot-Swap (Advanced)**:
+If you want to hot-swap without powering down:
+```bash
+# Stop services first
+pm2 stop all
+
+# Physically swap SIM card
+
+# Re-run setup
+sudo ./run.sh
+```
+
+**Note**: Hot-swapping may not be detected immediately. Power cycling is more reliable.
+
 ## ⚙️ Configuration
 
 ### config.yaml
