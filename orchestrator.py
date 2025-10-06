@@ -324,8 +324,10 @@ def send_discord_notification(current_ip, previous_ip=None, is_rotation=False, i
     webhook_url = config.get('discord', {}).get('webhook_url', '').strip()
     if not webhook_url or webhook_url == "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN":
         return False
-    if not is_failure:
-        update_ip_history(current_ip)
+    
+    # Note: History update is now handled in rotation code before calling this function
+    # This ensures the embed includes the latest entry (including failures)
+    
     try:
         payload = build_discord_embed(current_ip, previous_ip, is_rotation, is_failure, error_message)
         action, msg_id = post_or_patch_discord(webhook_url, payload, MSG_ID_PATH)
