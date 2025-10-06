@@ -290,21 +290,30 @@ def send_discord_notification(current_ip, previous_ip=None, is_rotation=False, i
 def detect_rndis_interface():
     """Detect RNDIS interface (enx*) that provides cellular connectivity."""
     try:
-        result = subprocess.run([IP_PATH, "-br", "link", "show"], 
-                               capture_output=True, text=True, check=False)
+        # Use absolute path to avoid subprocess issues
+        ip_cmd = IP_PATH if IP_PATH and os.path.exists(IP_PATH) else "/usr/sbin/ip"
+        
+        result = subprocess.run([ip_cmd, "-br", "link", "show"], 
+                               capture_output=True, text=True, check=False, timeout=5)
         if result.returncode != 0:
             print(f"detect_rndis_interface: ip link failed: {result.stderr}")
             return None, False
+        
+        print(f"detect_rndis_interface: Checking interfaces...")
+        print(f"detect_rndis_interface: Output: {result.stdout[:200]}")
             
         for line in result.stdout.splitlines():
+            line = line.strip()
             if line.startswith("enx") or line.startswith("eth1"):
                 parts = line.split()
+                if not parts:
+                    continue
                 iface = parts[0]
                 print(f"detect_rndis_interface: Found interface {iface}")
                 
                 # Check if interface has an IP address
-                ip_result = subprocess.run([IP_PATH, "-4", "addr", "show", iface],
-                                          capture_output=True, text=True, check=False)
+                ip_result = subprocess.run([ip_cmd, "-4", "addr", "show", iface],
+                                          capture_output=True, text=True, check=False, timeout=5)
                 if ip_result.returncode != 0:
                     print(f"detect_rndis_interface: ip addr failed for {iface}: {ip_result.stderr}")
                     return iface, False
@@ -316,19 +325,80 @@ def detect_rndis_interface():
                     print(f"detect_rndis_interface: Interface {iface} has no IP")
                     return iface, False
                     
-        print("detect_rndis_interface: No RNDIS interfaces found")
+        print("detect_rndis_interface: No RNDIS interfaces found in output")
     except Exception as e:
         print(f"detect_rndis_interface: Exception: {e}")
+        import traceback
+        traceback.print_exc()
     return None, False
 
-def teardown_rndis(wait_s: int):
+def deep_reset_rndis_modem():
+    """Deep reset modem radio to force new PDP context and better IP variety."""
+    print("🔄 Performing deep modem reset (radio + PDP context)...")
+    try:
+        at_port = detect_modem_port()
+        if not at_port or not os.path.exists(at_port):
+            print(f"⚠️ Deep reset skipped: AT port {at_port} not available")
+            return False
+            
+        with serial.Serial(at_port, 115200, timeout=5) as ser:
+            # Deactivate PDP context
+            print("  📡 Deactivating PDP context...")
+            ser.write(b"AT+CGACT=0,1\r\n")
+            time.sleep(2)
+            ser.read_all()  # Clear buffer
+            
+            # Detach from network
+            print("  📡 Detaching from network...")
+            ser.write(b"AT+CGATT=0\r\n")
+            time.sleep(2)
+            ser.read_all()
+            
+            # Radio off
+            print("  📴 Radio off...")
+            ser.write(b"AT+CFUN=0\r\n")
+            time.sleep(5)
+            ser.read_all()
+            
+            # Radio on
+            print("  📡 Radio on...")
+            ser.write(b"AT+CFUN=1\r\n")
+            time.sleep(8)
+            ser.read_all()
+            
+            # Reattach to network
+            print("  📡 Reattaching to network...")
+            ser.write(b"AT+CGATT=1\r\n")
+            time.sleep(2)
+            ser.read_all()
+            
+            # Reactivate PDP context
+            print("  📡 Reactivating PDP context...")
+            ser.write(b"AT+CGACT=1,1\r\n")
+            time.sleep(2)
+            ser.read_all()
+            
+        print("  ✅ Deep modem reset complete")
+        return True
+    except Exception as e:
+        print(f"  ⚠️ Deep modem reset failed: {e}")
+        return False
+
+def teardown_rndis(wait_s: int, deep_reset: bool = False):
     """Teardown RNDIS interface by bringing it down."""
     iface, _ = detect_rndis_interface()
     if iface:
         print(f"Bringing down RNDIS interface: {iface}")
         subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "down"], 
                       check=False)
-        print(f"Waiting {wait_s} seconds for RNDIS teardown...")
+        
+        if deep_reset:
+            # Perform deep modem reset for better IP variety
+            deep_reset_rndis_modem()
+            print(f"Waiting {wait_s} seconds after deep reset...")
+        else:
+            print(f"Waiting {wait_s} seconds for RNDIS teardown...")
+        
         time.sleep(max(1, int(wait_s)))
     else:
         print("No RNDIS interface found, skipping teardown")
@@ -438,7 +508,13 @@ def auto_rotation_worker():
 
                             for attempt in range(max_attempts):
                                 print(f"Auto-rotation: RNDIS Rotation Attempt {attempt + 1}/{max_attempts}")
-                                teardown_rndis(teardown_wait)
+                                
+                                # Use deep reset on second attempt for better IP variety
+                                use_deep_reset = (attempt > 0)
+                                if use_deep_reset:
+                                    print(f"Auto-rotation: Using deep reset on attempt {attempt + 1}")
+                                
+                                teardown_rndis(teardown_wait, deep_reset=use_deep_reset)
 
                                 try:
                                     start_rndis()
@@ -463,6 +539,11 @@ def auto_rotation_worker():
                                 # Check if IP changed
                                 time.sleep(5)  # Give it a moment to stabilize
                                 new_ip = get_current_ip()
+                                
+                                # Update IP history regardless of success/failure
+                                if new_ip != "Unknown":
+                                    update_ip_history(new_ip)
+                                
                                 if new_ip != previous_ip and new_ip != "Unknown":
                                     print(f"✅ Auto-rotation successful: {previous_ip} -> {new_ip}")
                                     send_discord_notification(new_ip, previous_ip, is_rotation=True)
@@ -565,7 +646,13 @@ def rotate():
 
             for attempt in range(max_attempts):
                 print(f"\n--- RNDIS Rotation Attempt {attempt + 1}/{max_attempts} ---")
-                teardown_rndis(teardown_wait)
+                
+                # Use deep reset on second attempt for better IP variety
+                use_deep_reset = (attempt > 0)
+                if use_deep_reset:
+                    print(f"Using deep reset on attempt {attempt + 1} for better IP variety")
+                
+                teardown_rndis(teardown_wait, deep_reset=use_deep_reset)
 
                 try:
                     start_rndis()
@@ -592,6 +679,11 @@ def rotate():
                 # Check if IP changed
                 time.sleep(5)  # Give it a moment to stabilize
                 new_ip = get_current_ip()
+                
+                # Update IP history regardless of success/failure
+                if new_ip != "Unknown":
+                    update_ip_history(new_ip)
+                
                 if new_ip != previous_ip and new_ip != "Unknown":
                     print(f"✅ IP rotation successful on attempt {attempt + 1}: {previous_ip} -> {new_ip}")
                     send_discord_notification(new_ip, previous_ip, is_rotation=True)
