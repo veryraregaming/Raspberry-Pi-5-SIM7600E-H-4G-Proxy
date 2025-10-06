@@ -386,9 +386,11 @@ HTML_TEMPLATE = """
                 
                 let historyHTML = '';
                 data.ips.slice(-10).reverse().forEach(ip => {
+                    const failedClass = ip.failed ? ' style="opacity: 0.7;"' : '';
+                    const failedNote = ip.failed ? ' <span style="color: #e74c3c; font-size: 0.85em;">(Failed - Same IP)</span>' : '';
                     historyHTML += `
-                        <div class="history-item">
-                            <span class="history-ip">${ip.ip}</span>
+                        <div class="history-item"${failedClass}>
+                            <span class="history-ip">${ip.ip}${failedNote}</span>
                             <span class="history-time">${ip.date} ${ip.time}</span>
                         </div>
                     `;

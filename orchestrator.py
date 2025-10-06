@@ -69,19 +69,37 @@ def save_ip_history(history):
     except Exception as e:
         print(f"Warning: Could not save IP history: {e}")
 
-def update_ip_history(current_ip):
+def update_ip_history(current_ip, force_add=False, is_failure=False):
+    """
+    Update IP history with current IP.
+    
+    Args:
+        current_ip: The current IP address
+        force_add: If True, always add entry even if IP is the same (for failed rotations)
+        is_failure: If True, mark this entry as a failed rotation
+    """
     history = load_ip_history()
     now = datetime.now().isoformat()
-    if not history["ips"] or history["ips"][-1]["ip"] != current_ip:
-        history["ips"].append({
+    
+    # Add entry if IP changed OR if force_add is True (for failed rotation attempts)
+    if force_add or not history["ips"] or history["ips"][-1]["ip"] != current_ip:
+        entry = {
             "ip": current_ip,
             "timestamp": now,
             "time": datetime.now().strftime("%H:%M:%S"),
             "date": datetime.now().strftime("%d/%m/%Y")
-        })
+        }
+        
+        # Add failure flag if this is a failed rotation
+        if is_failure:
+            entry["failed"] = True
+            entry["note"] = "Rotation Failed - Same IP"
+        
+        history["ips"].append(entry)
+        
         if history["first_seen"] is None:
             history["first_seen"] = now
-        elif len(history["ips"]) > 1:
+        elif len(history["ips"]) > 1 or force_add:
             history["rotations"] += 1
         if len(history["ips"]) > 10:
             history["ips"] = history["ips"][-10:]
@@ -582,6 +600,8 @@ def auto_rotation_worker():
                                         continue
                                     err = f"IP did not change after {max_attempts} attempts"
                                     print(f"Auto-rotation failed: {err}")
+                                    # Force add to history even though IP is same (to show failed rotation attempt)
+                                    update_ip_history(new_ip, force_add=True, is_failure=True)
                                     send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
                         else:
                             print("Auto-rotation: No RNDIS interface found, skipping rotation")
@@ -728,6 +748,8 @@ def rotate():
                         continue
                     err = f"IP did not change after {max_attempts} attempts"
                     print(f"IP rotation failed: {err}")
+                    # Force add to history even though IP is same (to show failed rotation attempt)
+                    update_ip_history(new_ip, force_add=True, is_failure=True)
                     send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
                     return jsonify({
                         'status': 'failed',
