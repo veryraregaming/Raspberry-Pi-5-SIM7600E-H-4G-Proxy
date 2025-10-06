@@ -8,6 +8,12 @@ discord:
 
 lan_bind_ip: 192.168.1.37
 
+modem:
+  mode: auto  # "auto" (RNDIS first, PPP fallback), "rndis" (RNDIS only), "ppp" (PPP only)
+  apn: everywhere
+  port: /dev/ttyUSB2
+  timeout: 30
+
 pm2:
   auto_restart: true
   enabled: true

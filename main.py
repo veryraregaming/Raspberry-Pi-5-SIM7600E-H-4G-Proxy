@@ -270,6 +270,12 @@ def write_config_yaml():
         "lan_bind_ip": detect_lan_ip(),
         "api": {"bind": "127.0.0.1", "port": 8088, "token": make_token()},
         "proxy": {"auth_enabled": False, "user": "", "password": ""},
+        "modem": {
+            "mode": "auto",  # "auto", "rndis", "ppp"
+            "apn": "everywhere",
+            "port": "/dev/ttyUSB2",
+            "timeout": 30
+        },
         "rotation": {
             "ppp_teardown_wait": 30,
             "ppp_restart_wait": 60,
@@ -457,22 +463,46 @@ def activate_modem_via_ppp(apn: str):
     print("  ❌ ppp0 did not come up in time.")
     return False
 
-def activate_modem(apn: str):
-    """Main modem activation function with RNDIS priority and PPP fallback."""
-    print("🚀 Starting modem activation...")
+def activate_modem(apn: str, mode: str = "auto"):
+    """Main modem activation function with configurable mode.
     
-    # Try RNDIS first (preferred method)
-    iface, ip = activate_modem_via_rndis()
-    if iface and ip:
-        return "rndis", iface, ip
+    Args:
+        apn: APN to use
+        mode: "auto" (RNDIS first, PPP fallback), "rndis" (RNDIS only), "ppp" (PPP only)
+    """
+    print(f"🚀 Starting modem activation (mode: {mode})...")
     
-    # Fallback to PPP
-    print("  🔄 RNDIS failed, trying PPP fallback...")
-    if activate_modem_via_ppp(apn):
-        return "ppp", "ppp0", None
+    if mode == "ppp":
+        # Force PPP mode
+        print("  📡 Using PPP mode (forced)")
+        if activate_modem_via_ppp(apn):
+            return "ppp", "ppp0", None
+        print("  ❌ PPP activation failed")
+        return None, None, None
     
-    print("  ❌ Both RNDIS and PPP activation failed")
-    return None, None, None
+    elif mode == "rndis":
+        # Force RNDIS mode
+        print("  📡 Using RNDIS mode (forced)")
+        iface, ip = activate_modem_via_rndis()
+        if iface and ip:
+            return "rndis", iface, ip
+        print("  ❌ RNDIS activation failed")
+        return None, None, None
+    
+    else:
+        # Auto mode: Try RNDIS first (preferred method)
+        print("  📡 Auto mode: trying RNDIS first...")
+        iface, ip = activate_modem_via_rndis()
+        if iface and ip:
+            return "rndis", iface, ip
+        
+        # Fallback to PPP
+        print("  🔄 RNDIS failed, trying PPP fallback...")
+        if activate_modem_via_ppp(apn):
+            return "ppp", "ppp0", None
+        
+        print("  ❌ Both RNDIS and PPP activation failed")
+        return None, None, None
 
 def proxy_test(lan_ip: str):
     try:
@@ -538,10 +568,13 @@ def main():
     cfg = write_config_yaml()
     write_ecosystem()
 
-    apn = (cfg.get("modem") or {}).get("apn", "everywhere") if isinstance(cfg.get("modem"), dict) else "everywhere"
+    # Get modem settings from config
+    modem_cfg = cfg.get("modem") or {}
+    apn = modem_cfg.get("apn", "everywhere") if isinstance(modem_cfg, dict) else "everywhere"
+    modem_mode = modem_cfg.get("mode", "auto") if isinstance(modem_cfg, dict) else "auto"
     
-    # Try to activate modem (RNDIS first, then PPP fallback)
-    mode, iface, cellular_ip = activate_modem(apn)
+    # Try to activate modem with configured mode
+    mode, iface, cellular_ip = activate_modem(apn, modem_mode)
     
     if mode == "rndis":
         print(f"  ✅ Cellular connection via RNDIS: {iface} ({cellular_ip})")

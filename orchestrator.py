@@ -548,10 +548,22 @@ def auto_rotation_worker():
                         current_ip = get_current_ip()
                         previous_ip = current_ip
 
+                        # Get configured modem mode
+                        modem_mode = config.get('modem', {}).get('mode', 'auto')
+
                         # Check if we have RNDIS interface available
                         rndis_iface, rndis_has_ip = detect_rndis_interface()
                         
-                        if rndis_iface:
+                        # Determine which mode to use
+                        use_rndis = False
+                        if modem_mode == "rndis":
+                            use_rndis = True
+                        elif modem_mode == "ppp":
+                            use_rndis = False
+                        elif modem_mode == "auto":
+                            use_rndis = (rndis_iface is not None)
+                        
+                        if use_rndis and rndis_iface:
                             print(f"Auto-rotation: Using RNDIS interface: {rndis_iface}")
                             rotation_config = config.get('rotation', {}) or {}
                             teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
@@ -686,10 +698,23 @@ def rotate():
 
         print("Starting IP rotation...")
 
+        # Get configured modem mode
+        modem_mode = config.get('modem', {}).get('mode', 'auto')
+        print(f"Modem mode: {modem_mode}")
+
         # Check if we have RNDIS interface available
         rndis_iface, rndis_has_ip = detect_rndis_interface()
         
-        if rndis_iface:
+        # Determine which mode to use based on config and availability
+        use_rndis = False
+        if modem_mode == "rndis":
+            use_rndis = True
+        elif modem_mode == "ppp":
+            use_rndis = False
+        elif modem_mode == "auto":
+            use_rndis = (rndis_iface is not None)
+        
+        if use_rndis and rndis_iface:
             print(f"Using RNDIS interface: {rndis_iface}")
             rotation_config = config.get('rotation', {}) or {}
             teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
