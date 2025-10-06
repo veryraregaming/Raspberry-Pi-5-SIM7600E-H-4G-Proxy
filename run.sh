@@ -54,6 +54,7 @@ echo "   sudo=${SUDO_PATH}"
 
 # -------- write sudoers with NOPASSWD + !requiretty ------------------
 echo "==> Writing /etc/sudoers.d/4g-proxy..."
+DHCLIENT_PATH="$(command -v dhclient || echo /sbin/dhclient)"
 cat >/etc/sudoers.d/4g-proxy <<EOF
 # 4G Proxy sudoers for ${REAL_USER}
 Cmnd_Alias PROXY_CMDS = \\
@@ -61,6 +62,9 @@ Cmnd_Alias PROXY_CMDS = \\
   ${PPPD_PATH} *, \\
   ${IP_PATH} route del default, \\
   ${IP_PATH} route add default dev ppp0 metric 200, \\
+  ${IP_PATH} link set dev * up, \\
+  ${IP_PATH} link set dev * down, \\
+  ${DHCLIENT_PATH} *, \\
   ${SYSTEMCTL_PATH} start ModemManager, \\
   ${SYSTEMCTL_PATH} stop ModemManager, \\
   ${MMCLI_PATH} -m 0 --disable, \\
