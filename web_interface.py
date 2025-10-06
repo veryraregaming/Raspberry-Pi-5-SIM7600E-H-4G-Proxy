@@ -643,6 +643,38 @@ def api_notify():
         return jsonify(data)
     return jsonify({'error': 'API unavailable'}), 500
 
+@app.route('/api/auto-rotation/status')
+def api_auto_rotation_status():
+    """Get auto-rotation status"""
+    data = api_request('/auto-rotation/status')
+    if data:
+        return jsonify(data)
+    return jsonify({'enabled': False, 'interval_seconds': 0, 'interval_minutes': 0, 'error': 'API unavailable'}), 500
+
+@app.route('/api/auto-rotation/enable', methods=['POST'])
+def api_auto_rotation_enable():
+    """Enable auto-rotation"""
+    data = api_request('/auto-rotation/enable', method='POST')
+    if data:
+        return jsonify(data)
+    return jsonify({'error': 'API unavailable'}), 500
+
+@app.route('/api/auto-rotation/disable', methods=['POST'])
+def api_auto_rotation_disable():
+    """Disable auto-rotation"""
+    data = api_request('/auto-rotation/disable', method='POST')
+    if data:
+        return jsonify(data)
+    return jsonify({'error': 'API unavailable'}), 500
+
+@app.route('/api/auto-rotation/restart', methods=['POST'])
+def api_auto_rotation_restart():
+    """Restart auto-rotation"""
+    data = api_request('/auto-rotation/restart', method='POST')
+    if data:
+        return jsonify(data)
+    return jsonify({'error': 'API unavailable'}), 500
+
 if __name__ == '__main__':
     print("🌐 Starting 4G Proxy Web Dashboard...")
     print("📱 Dashboard will be available at: http://192.168.1.37:5000")
