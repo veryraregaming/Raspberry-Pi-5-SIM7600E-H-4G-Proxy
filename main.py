@@ -395,6 +395,8 @@ def make_token(nbytes: int = 48) -> str:
 
 def write_config_yaml():
     cfg_path = BASE / "config.yaml"
+    is_new_install = not cfg_path.exists()
+    
     if cfg_path.exists():
         try:
             existing = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
@@ -402,6 +404,11 @@ def write_config_yaml():
             existing = {}
     else:
         existing = {}
+
+    # Smart default for run_optimization:
+    # - NEW install: true (auto-optimize on first setup)
+    # - EXISTING install: false (don't surprise users with 2hr process)
+    default_run_optimization = is_new_install
 
     defaults = {
         "lan_bind_ip": detect_lan_ip(),
@@ -417,7 +424,7 @@ def write_config_yaml():
             "ppp_teardown_wait": 30,
             "ppp_restart_wait": 60,
             "max_attempts": 2,
-            "run_optimization": False,
+            "run_optimization": default_run_optimization,
             "randomise_imei": False,
             "deep_reset_enabled": False,
             "deep_reset_method": "mmcli",
@@ -435,7 +442,12 @@ def write_config_yaml():
             merged[k] = v
 
     cfg_path.write_text(yaml.safe_dump(merged, sort_keys=False), encoding="utf-8")
-    print(f"  ✅ config.yaml written (LAN={merged['lan_bind_ip']})")
+    
+    if is_new_install:
+        print(f"  ✅ config.yaml written (LAN={merged['lan_bind_ip']}, NEW INSTALL - optimization enabled)")
+    else:
+        print(f"  ✅ config.yaml updated (LAN={merged['lan_bind_ip']}, existing settings preserved)")
+    
     return merged
 
 def write_squid_conf(cfg: dict, cellular_ip=None):
