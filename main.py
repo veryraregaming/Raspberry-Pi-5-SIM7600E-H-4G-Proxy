@@ -93,26 +93,84 @@ def detect_qmi_interface():
         pass
     return None, None
 
-def setup_qmi_interface(iface):
-    """Setup QMI interface using qmicli."""
+def switch_modem_to_qmi():
+    """Switch modem to QMI mode using AT commands."""
+    try:
+        print("  🔄 Checking if modem needs to be switched to QMI mode...")
+        
+        # Find modem control port
+        modem_dev = "/dev/ttyUSB2"
+        if not os.path.exists(modem_dev):
+            modem_dev = "/dev/ttyUSB0"
+        
+        if not os.path.exists(modem_dev):
+            print("  ⚠️ No modem control port found")
+            return False
+        
+        with serial.Serial(modem_dev, 115200, timeout=5) as ser:
+            # Check current mode
+            ser.write(b"AT+CUSBPIDSWITCH?\r\n")
+            time.sleep(1)
+            response = ser.read(1000).decode('utf-8', errors='ignore')
+            
+            # If already in QMI mode (9011), skip
+            if '9011' in response:
+                print("  ✅ Modem already in QMI mode")
+                return True
+            
+            # Switch to QMI mode
+            print("  🔧 Switching modem to QMI mode...")
+            ser.write(b"AT+CUSBPIDSWITCH=9011,1,1\r\n")
+            time.sleep(2)
+            response = ser.read(1000).decode('utf-8', errors='ignore')
+            
+            if 'OK' in response:
+                print("  ✅ Modem switched to QMI mode, rebooting...")
+                # Reboot modem
+                ser.write(b"AT+CRESET\r\n")
+                time.sleep(5)
+                print("  ⏳ Waiting 15 seconds for modem to re-enumerate...")
+                time.sleep(15)
+                return True
+            else:
+                print(f"  ⚠️ Failed to switch to QMI mode: {response}")
+                return False
+                
+    except Exception as e:
+        print(f"  ⚠️ Error switching to QMI mode: {e}")
+        return False
+
+def setup_qmi_interface(iface, apn="everywhere"):
+    """Setup QMI interface using qmicli with proper CID management."""
     print(f"  🔧 Setting up QMI interface: {iface}")
+    
+    # Find QMI device
+    qmi_dev = "/dev/cdc-wdm0"
+    if not os.path.exists(qmi_dev):
+        print(f"  ⚠️ QMI device {qmi_dev} not found")
+        return None
     
     # Bring interface up
     run_cmd(["sudo", IP_PATH, "link", "set", "dev", iface, "up"], check=False)
     time.sleep(2)
     
-    # Start network connection via qmi-network
-    print(f"  📡 Starting QMI connection for {iface}...")
-    out, err, rc = run_cmd(["sudo", "qmi-network", f"/dev/cdc-wdm0", "start"], check=False, timeout=30)
+    # Start network connection with qmicli (keeps CID for later release)
+    print(f"  📡 Starting QMI connection for {iface} with APN: {apn}...")
+    out, err, rc = run_cmd([
+        "sudo", "qmicli", "-d", qmi_dev,
+        "--wds-start-network", f"apn={apn}",
+        "--client-no-release-cid"
+    ], check=False, timeout=30)
     
     if rc == 0:
-        # Configure IP via qmicli
-        print(f"  📡 Configuring IP for {iface}...")
+        # Use udhcpc to get IP from modem
+        print(f"  📡 Getting IP via DHCP for {iface}...")
         time.sleep(2)
         
-        # Get DHCP settings from modem
-        out, err, rc = run_cmd(["sudo", "qmicli", "-d", "/dev/cdc-wdm0", "--wds-get-current-settings"], 
-                              check=False, timeout=10)
+        # Run udhcpc to configure interface
+        out, err, rc = run_cmd([
+            "sudo", "udhcpc", "-i", iface, "-q"
+        ], check=False, timeout=10)
         
         # Check if we got an IP
         ip = detect_ipv4(iface)
@@ -130,7 +188,10 @@ def activate_modem_via_qmi():
     """Try to activate modem via QMI interface."""
     print("📡 Activating SIM7600E-H modem via QMI…")
     
-    # First, try to detect existing QMI interface
+    # Try to switch modem to QMI mode if needed
+    switch_modem_to_qmi()
+    
+    # Try to detect existing QMI interface
     iface, ip = detect_qmi_interface()
     
     if iface and ip:
@@ -139,7 +200,10 @@ def activate_modem_via_qmi():
     
     if iface:
         # Interface exists but no IP, try to get one
-        ip = setup_qmi_interface(iface)
+        # Get APN from config
+        global CONFIG
+        apn = CONFIG.get('modem', {}).get('apn', 'everywhere')
+        ip = setup_qmi_interface(iface, apn)
         if ip:
             return iface, ip
     

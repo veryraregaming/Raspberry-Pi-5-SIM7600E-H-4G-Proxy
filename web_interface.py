@@ -265,6 +265,8 @@ HTML_TEMPLATE = """
                     <div id="proxy-status">
                         <div class="ip-display" id="current-ip">Loading...</div>
                         <div class="status" id="connection-status">Checking...</div>
+                        <p style="margin-top: 10px;"><strong>Mode:</strong> <span id="connection-mode" style="font-family: 'Courier New', monospace; color: #667eea;">-</span></p>
+                        <p><strong>Interface:</strong> <span id="interface-name" style="font-family: 'Courier New', monospace; color: #667eea;">-</span></p>
                     </div>
                 </div>
                 
@@ -359,8 +361,10 @@ HTML_TEMPLATE = """
             const data = await response.json();
             
             document.getElementById('current-ip').textContent = data.public_ip || 'Unknown';
-            document.getElementById('connection-status').textContent = data.public_ip ? 'Connected' : 'Disconnected';
-            document.getElementById('connection-status').className = 'status ' + (data.public_ip ? 'success' : 'error');
+            document.getElementById('connection-status').textContent = data.connected ? 'Connected' : 'Disconnected';
+            document.getElementById('connection-status').className = 'status ' + (data.connected ? 'success' : 'error');
+            document.getElementById('connection-mode').textContent = data.connection_mode || 'Unknown';
+            document.getElementById('interface-name').textContent = data.interface || 'Unknown';
         }
         
         async function loadHistory() {
