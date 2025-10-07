@@ -6,6 +6,8 @@ A complete 4G mobile proxy solution for Raspberry Pi 5 with SIM7600E-H modem. Ro
 
 - **🌐 4G Proxy**: HTTP proxy through SIM card (port 3128)
 - **🔄 IP Rotation**: Automatic IP changes with AT commands and failure tracking
+- **🎯 Auto-Optimizer**: Automatically finds optimal rotation settings (~2hr one-time test)
+- **✈️ Airplane Mode Simulation**: Deregisters from network for better IP variety
 - **📱 Discord Notifications**: Real-time IP change notifications with history and error reporting
 - **🎯 APN Auto-Detection**: Works with any UK carrier SIM card automatically
 - **🛡️ Error Handling**: Comprehensive failure tracking and detailed error messages
@@ -73,6 +75,141 @@ sudo ./run.sh
 ```
 
 Your existing settings (Discord webhook, API tokens, etc.) are **never touched** - only rotation timings are optimized!
+
+## 🎯 Automatic Rotation Optimizer
+
+### **What Is It?**
+An intelligent testing system that automatically finds the **optimal rotation settings** for your specific carrier and network conditions. No more guessing!
+
+### **How It Works**
+
+#### **For New Users (Automatic)**
+On first install, the system automatically:
+1. ✅ Starts proxy normally
+2. ✅ Runs **30-minute control test** (measures natural IP changes)
+3. ✅ Tests **5 different configurations** (~1.5 hours)
+   - Fast (1.5min/rotation) - 5 tests
+   - Quick (2min/rotation) - 5 tests
+   - Balanced (3min/rotation) - 5 tests
+   - Moderate (4min/rotation) - 4 tests
+   - Aggressive (5min/rotation) - 3 tests
+4. ✅ Analyzes which config gives best IP variety
+5. ✅ **Automatically applies** optimal settings to `config.yaml`
+6. ✅ Restarts orchestrator with new settings
+7. ✅ **Disables optimization flag** (won't run again)
+8. ✅ Continues normal operation
+
+**Total time:** ~2 hours (runs once, then never again)
+
+#### **For Existing Users (Opt-In)**
+If you want to re-optimize (e.g., changed carriers, network conditions):
+
+```bash
+# 1. Enable optimization:
+nano config.yaml
+
+rotation:
+  run_optimization: true  # Change to true
+
+# 2. Run setup:
+sudo ./run.sh
+
+# 3. Go grab coffee/sleep - system will auto-optimize
+# 4. When done, flag is auto-disabled and best settings applied
+```
+
+### **What the Optimizer Tests**
+
+#### **Control Test (30 minutes)**
+- Monitors IP without any rotations
+- Measures natural carrier IP changes
+- Establishes baseline for comparison
+- Ensures results are statistically valid
+
+#### **Configuration Tests (22 rotations)**
+Each config is tested multiple times to measure:
+- ✅ **Unique IPs obtained** - How many different IPs
+- ✅ **Success rate** - % of rotations that change IP
+- ✅ **Average time** - Seconds per rotation
+- ✅ **IPs per hour** - Efficiency metric
+
+### **Results & Ranking**
+
+The optimizer ranks configs by:
+1. **Most Efficient** - Best IPs per hour (speed + variety)
+2. **Most Variety** - Highest unique IP count
+3. **Most Reliable** - Highest success rate
+
+### **What Happens When Complete?**
+
+```
+🏁 OPTIMIZATION COMPLETE!
+======================================================================
+
+🔬 CONTROL TEST BASELINE:
+   Natural IP changes per hour: 0.00
+   Unique IPs (no rotation): 1
+   ✅ No natural changes - all rotation effects are from our settings!
+
+💡 RECOMMENDATION:
+Best overall config: Balanced (3min per rotation)
+Settings:
+  ppp_teardown_wait: 60
+  ppp_restart_wait: 120
+
+Performance:
+  4 unique IPs obtained
+  12.50 IPs per hour
+  80% success rate
+  3.0 minutes per rotation
+
+Improvement over baseline: 12.50 IPs/hour (vs 0 natural changes)
+
+======================================================================
+🤖 Auto-apply mode: Applying recommended settings...
+✅ Settings applied and optimization flag disabled (won't run again)
+⚙️ Restoring system to original state...
+✅ Auto-rotation enabled
+======================================================================
+```
+
+Then the system:
+1. ✅ Updates `config.yaml` with optimal timings
+2. ✅ Sets `run_optimization: false` (won't run again)
+3. ✅ Saves results to `optimization_results.json`
+4. ✅ Restores auto-rotation to enabled
+5. ✅ Continues normal proxy operation with optimized settings
+
+### **Check Results Later**
+
+```bash
+# View full results:
+cat optimization_results.json
+
+# Or search the run.sh output:
+grep -A 30 "RECOMMENDATION" /path/to/run.sh/output
+```
+
+### **Re-run Optimization**
+
+Only needed if:
+- You changed carriers (EE → Three, etc.)
+- Network conditions changed significantly
+- You moved to a different location
+
+Simply set `run_optimization: true` again and run `sudo ./run.sh`
+
+### **TL;DR - What Happens When Finished?**
+
+**Automatic Actions (no manual steps needed):**
+1. ✅ Best rotation settings written to `config.yaml`
+2. ✅ `run_optimization` flag set to `false` (won't run again)
+3. ✅ Full results saved to `optimization_results.json`
+4. ✅ Auto-rotation re-enabled
+5. ✅ PM2 orchestrator continues running normally
+6. ✅ Proxy keeps working with optimized timings
+
+**You don't need to do anything!** Just let it run, go to sleep, wake up to an optimized proxy. 🎯
 
 **After setup, you'll see:**
 - 📡 HTTP Proxy: `192.168.1.37:3128`
