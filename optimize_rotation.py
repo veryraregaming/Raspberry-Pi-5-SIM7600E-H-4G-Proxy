@@ -250,31 +250,48 @@ def test_configuration(teardown_wait, restart_wait, test_count, description):
     
     return results
 
-def disable_auto_rotation():
-    """Disable auto-rotation during testing."""
+def get_auto_rotation_status():
+    """Get current auto-rotation status."""
     token = get_api_token()
     headers = {"Authorization": f"Bearer {token}"}
     try:
-        response = requests.post(f"{API_BASE}/auto-rotation/disable", headers=headers, timeout=10)
+        response = requests.get(f"{API_BASE}/auto-rotation/status", headers=headers, timeout=10)
         if response.status_code == 200:
-            print("  ✅ Auto-rotation disabled for testing")
+            data = response.json()
+            return data.get('enabled', False)
+    except Exception as e:
+        print(f"  ⚠️ Could not check auto-rotation status: {e}")
+    return None
+
+def set_auto_rotation(enabled):
+    """Enable or disable auto-rotation."""
+    token = get_api_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    endpoint = "enable" if enabled else "disable"
+    
+    try:
+        response = requests.post(f"{API_BASE}/auto-rotation/{endpoint}", headers=headers, timeout=10)
+        if response.status_code == 200:
+            status = "enabled" if enabled else "disabled"
+            print(f"  ✅ Auto-rotation {status}")
             return True
     except Exception as e:
-        print(f"  ⚠️ Could not disable auto-rotation: {e}")
+        print(f"  ⚠️ Could not set auto-rotation: {e}")
     return False
 
-def enable_auto_rotation():
-    """Re-enable auto-rotation after testing."""
-    token = get_api_token()
-    headers = {"Authorization": f"Bearer {token}"}
-    try:
-        response = requests.post(f"{API_BASE}/auto-rotation/enable", headers=headers, timeout=10)
-        if response.status_code == 200:
-            print("  ✅ Auto-rotation re-enabled")
-            return True
-    except Exception as e:
-        print(f"  ⚠️ Could not re-enable auto-rotation: {e}")
-    return False
+def restore_auto_rotation(original_state):
+    """Restore auto-rotation to its original state."""
+    if original_state is None:
+        print("  ⚠️ Unknown original state, leaving auto-rotation as-is")
+        return
+    
+    current_state = get_auto_rotation_status()
+    if current_state == original_state:
+        status = "enabled" if original_state else "disabled"
+        print(f"  ✅ Auto-rotation already {status} (no change needed)")
+    else:
+        print(f"  ⚙️ Restoring auto-rotation to original state...")
+        set_auto_rotation(original_state)
 
 def run_optimization():
     """Run full optimization test."""
@@ -295,10 +312,22 @@ def run_optimization():
     
     input("\nPress Enter to start optimization... (or Ctrl+C to cancel)")
     
-    # Disable auto-rotation during testing
+    # Save current auto-rotation state
     print("\n⚙️ Preparing test environment...")
-    disable_auto_rotation()
-    print("⏱️ Waiting 10 seconds for system to stabilize...")
+    original_auto_rotation = get_auto_rotation_status()
+    if original_auto_rotation is not None:
+        status = "enabled" if original_auto_rotation else "disabled"
+        print(f"  📌 Current auto-rotation: {status}")
+        print(f"  💾 Saved original state (will restore when done)")
+    
+    # Disable auto-rotation during testing
+    if original_auto_rotation:
+        print(f"  🛑 Temporarily disabling auto-rotation for accurate testing...")
+        set_auto_rotation(False)
+    else:
+        print(f"  ✓ Auto-rotation already disabled")
+    
+    print("  ⏱️ Waiting 10 seconds for system to stabilize...")
     time.sleep(10)
     
     # Run control test first
@@ -422,21 +451,38 @@ def run_optimization():
     else:
         print("Skipped. You can manually apply settings from the report above.")
     
-    # Re-enable auto-rotation
-    print("\n⚙️ Restoring auto-rotation...")
-    enable_auto_rotation()
+    # Restore original auto-rotation state
+    print(f"\n{'='*70}")
+    print("⚙️ Restoring system to original state...")
+    restore_auto_rotation(original_auto_rotation)
+    print(f"{'='*70}")
 
-if __name__ == "__main__":
+def main():
+    """Main entry point with proper cleanup on interruption."""
+    original_state = None
+    
     try:
+        # Check original state before starting
+        original_state = get_auto_rotation_status()
+        
+        # Run the optimization
         run_optimization()
+        
     except KeyboardInterrupt:
         print("\n\n⚠️ Optimization cancelled by user")
-        print("⚙️ Re-enabling auto-rotation...")
-        enable_auto_rotation()
+        print("⚙️ Restoring system to original state...")
+        if original_state is not None:
+            restore_auto_rotation(original_state)
+        print("✅ Cleanup complete")
+        
     except Exception as e:
         print(f"\n\n❌ Error: {e}")
-        print("⚙️ Re-enabling auto-rotation...")
-        enable_auto_rotation()
+        print("⚙️ Attempting to restore system state...")
+        if original_state is not None:
+            restore_auto_rotation(original_state)
         import traceback
         traceback.print_exc()
+
+if __name__ == "__main__":
+    main()
 
