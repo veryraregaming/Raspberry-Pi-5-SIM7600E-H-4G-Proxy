@@ -761,17 +761,33 @@ def deep_reset_rndis_modem(randomise_imei_enabled=False):
             ser.write(b"AT+CGATT=0\r\n")
             time.sleep(2)
             ser.read_all()
+            
+            # Deregister from network completely (like airplane mode)
+            print("  ✈️ Deregistering from network (airplane mode)...")
+            ser.write(b"AT+COPS=2\r\n")  # Deregister
+            time.sleep(3)
+            ser.read_all()
 
-            # Radio off
-            print("  📴 Radio off...")
-            ser.write(b"AT+CFUN=0\r\n")
+            # Radio off (flight mode)
+            print("  📴 Radio off (flight mode)...")
+            ser.write(b"AT+CFUN=4\r\n")  # Airplane mode
             time.sleep(5)
             ser.read_all()
+
+            # Wait in airplane mode (this is key for CGNAT release)
+            print("  ⏱️ Extended wait in flight mode (60s for CGNAT release)...")
+            time.sleep(60)
 
             # Radio on
             print("  📡 Radio on...")
             ser.write(b"AT+CFUN=1\r\n")
             time.sleep(8)
+            ser.read_all()
+            
+            # Auto-register to network
+            print("  📡 Auto-registering to network...")
+            ser.write(b"AT+COPS=0\r\n")  # Auto register
+            time.sleep(5)
             ser.read_all()
 
             # Reattach to network
