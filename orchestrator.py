@@ -225,7 +225,7 @@ def get_current_ip():
                 if r.returncode != 0 or "inet " not in r.stdout:
                     # No cellular interface is up
                     return "Unknown"
-            except Exception:
+    except Exception:
                 return "Unknown"
     
     # Cellular interface is up, check public IP via proxy
