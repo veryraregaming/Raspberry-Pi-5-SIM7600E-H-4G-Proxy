@@ -60,6 +60,12 @@ rotation:
   # Increase to 120-240 for better IP variety with CGNAT carriers
   ppp_restart_wait: 240
   
+  # Auto-optimize rotation settings (one-time)
+  # Set to true to automatically test and find optimal timings
+  # Script will run ~2 hour test, apply best settings, then disable itself
+  # Results saved to optimization_results.json for review
+  run_optimization: false
+  
   # Randomise IMEI on each rotation (helps get different IPs)
   # Set to true to change IMEI each rotation for maximum IP variety
   # Set to false to keep original IMEI (default, safer)

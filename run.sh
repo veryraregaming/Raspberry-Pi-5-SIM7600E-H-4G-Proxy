@@ -247,6 +247,21 @@ for i in {1..10}; do
   sleep 1
 done
 
+# -------- check if optimization should run ----------------------------
+echo "==> Checking optimization settings..."
+sudo -u "${REAL_USER}" python3 "${SCRIPT_DIR}/check_optimization.py"
+if [ $? -eq 0 ]; then
+  echo "✅ Optimization check complete"
+  # If optimization flag was enabled and now disabled, restart PM2
+  if grep -q "Optimization complete" "${SCRIPT_DIR}/optimization.log" 2>/dev/null; then
+    echo "==> Restarting orchestrator with optimized settings..."
+    sudo -u "${REAL_USER}" pm2 restart 4g-proxy-orchestrator
+    sleep 3
+  fi
+else
+  echo "⚠️ Optimization check encountered issues (continuing anyway)"
+fi
+
 # -------- final health check ----------------------------------------------
 echo "==> Final API health check..."
 if curl -s --max-time 5 http://127.0.0.1:8088/status >/dev/null; then

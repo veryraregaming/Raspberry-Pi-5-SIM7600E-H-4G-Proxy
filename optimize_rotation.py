@@ -442,16 +442,29 @@ def run_optimization(auto_start=False):
     print(f"📄 Full results saved to: {RESULTS_FILE}")
     print(f"{'='*70}")
     
-    # Ask if user wants to apply recommended settings
-    print(f"\nApply recommended settings to config.yaml?")
-    apply = input("Type 'yes' to apply, or Enter to skip: ").strip().lower()
+    # Ask if user wants to apply recommended settings (or auto-apply if in auto mode)
+    if auto_start:
+        print(f"\n🤖 Auto-apply mode: Applying recommended settings...")
+        apply = True
+    else:
+        print(f"\nApply recommended settings to config.yaml?")
+        apply_input = input("Type 'yes' to apply, or Enter to skip: ").strip().lower()
+        apply = (apply_input == 'yes')
     
-    if apply == 'yes':
+    if apply:
         update_rotation_config(
             best['config']['teardown_wait'],
             best['config']['restart_wait']
         )
-        print("✅ Settings applied! Restart orchestrator with: pm2 restart 4g-proxy-orchestrator")
+        
+        # Disable run_optimization flag so it doesn't run again
+        config = load_config()
+        if 'rotation' in config and config['rotation'].get('run_optimization'):
+            config['rotation']['run_optimization'] = False
+            save_config(config)
+            print("✅ Settings applied and optimization flag disabled (won't run again)")
+        else:
+            print("✅ Settings applied! Restart orchestrator with: pm2 restart 4g-proxy-orchestrator")
     else:
         print("Skipped. You can manually apply settings from the report above.")
     
