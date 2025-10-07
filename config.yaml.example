@@ -49,14 +49,16 @@ proxy:
 
 # IP Rotation Settings
 rotation:
-  # Number of attempts per rotation (2 = simple restart + deep reset)
-  max_attempts: 2
+  # Number of attempts per rotation (3 recommended for sticky CGNAT)
+  max_attempts: 3
   
   # Wait time after bringing interface down (seconds)
-  ppp_teardown_wait: 30
+  # Increase to 60+ if carrier has sticky CGNAT (like EE UK)
+  ppp_teardown_wait: 60
   
   # Wait time for new IP assignment (seconds)
-  ppp_restart_wait: 60
+  # Increase to 120-240 for better IP variety with CGNAT carriers
+  ppp_restart_wait: 240
   
   # Deep reset settings (RNDIS mode always uses deep reset on attempt 2)
   # For PPP mode only:

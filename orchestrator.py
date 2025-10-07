@@ -788,15 +788,14 @@ def auto_rotation_worker():
                             restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
                             max_attempts  = int(rotation_config.get('max_attempts', 2))
 
-                            for attempt in range(max_attempts):
-                                print(f"Auto-rotation: QMI Rotation Attempt {attempt + 1}/{max_attempts}")
+            for attempt in range(max_attempts):
+                print(f"Auto-rotation: QMI Rotation Attempt {attempt + 1}/{max_attempts}")
 
-                                # Use deep reset on second attempt for better IP variety
-                                use_deep_reset = (attempt > 0)
-                                if use_deep_reset:
-                                    print(f"Auto-rotation: Using deep reset on attempt {attempt + 1}")
+                # Always use deep reset for better IP variety with sticky CGNAT
+                use_deep_reset = True
+                print(f"Auto-rotation: Using deep reset for better IP variety")
 
-                                teardown_qmi(teardown_wait, deep_reset=use_deep_reset)
+                teardown_qmi(teardown_wait, deep_reset=use_deep_reset)
 
                                 try:
                                     start_qmi()
@@ -847,15 +846,14 @@ def auto_rotation_worker():
                             restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
                             max_attempts  = int(rotation_config.get('max_attempts', 2))
 
-                            for attempt in range(max_attempts):
-                                print(f"Auto-rotation: RNDIS Rotation Attempt {attempt + 1}/{max_attempts}")
+            for attempt in range(max_attempts):
+                print(f"Auto-rotation: RNDIS Rotation Attempt {attempt + 1}/{max_attempts}")
 
-                                # Use deep reset on second attempt for better IP variety
-                                use_deep_reset = (attempt > 0)
-                                if use_deep_reset:
-                                    print(f"Auto-rotation: Using deep reset on attempt {attempt + 1}")
+                # Always use deep reset for better IP variety with sticky CGNAT
+                use_deep_reset = True
+                print(f"Auto-rotation: Using deep reset for better IP variety")
 
-                                teardown_rndis(teardown_wait, deep_reset=use_deep_reset)
+                teardown_rndis(teardown_wait, deep_reset=use_deep_reset)
 
                                 try:
                                     start_rndis()
@@ -1046,10 +1044,9 @@ def rotate():
             for attempt in range(max_attempts):
                 print(f"\n--- QMI Rotation Attempt {attempt + 1}/{max_attempts} ---")
 
-                # Use deep reset on second attempt for better IP variety
-                use_deep_reset = (attempt > 0)
-                if use_deep_reset:
-                    print(f"Using deep reset on attempt {attempt + 1} for better IP variety")
+                # Always use deep reset for better IP variety with sticky CGNAT
+                use_deep_reset = True
+                print(f"Using deep reset for better IP variety (sticky CGNAT workaround)")
 
                 teardown_qmi(teardown_wait, deep_reset=use_deep_reset)
 
@@ -1123,10 +1120,9 @@ def rotate():
             for attempt in range(max_attempts):
                 print(f"\n--- RNDIS Rotation Attempt {attempt + 1}/{max_attempts} ---")
 
-                # Use deep reset on second attempt for better IP variety
-                use_deep_reset = (attempt > 0)
-                if use_deep_reset:
-                    print(f"Using deep reset on attempt {attempt + 1} for better IP variety")
+                # Always use deep reset for better IP variety with sticky CGNAT
+                use_deep_reset = True
+                print(f"Using deep reset for better IP variety (sticky CGNAT workaround)")
 
                 teardown_rndis(teardown_wait, deep_reset=use_deep_reset)
 
