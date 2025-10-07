@@ -1588,46 +1588,36 @@ def auto_rotation_restart():
     start_auto_rotation()
     return jsonify({'status': 'restarted', 'message': 'Auto-rotation thread restarted'})
 
-def check_and_run_optimization():
-    """Check if optimization should run on startup."""
-    config = load_config()
-    should_optimize = config.get('rotation', {}).get('run_optimization', False)
+def run_optimization_in_background():
+    """Run optimization in background thread after Flask starts."""
+    # Wait for Flask to start
+    print("⏱️ Waiting 10 seconds for orchestrator API to start...")
+    time.sleep(10)
     
-    if should_optimize:
-        print("\n" + "="*60)
-        print("🎯 OPTIMIZATION MODE ENABLED")
-        print("="*60)
-        print("Starting automatic rotation optimization...")
-        print("This will take ~2 hours to find optimal settings.")
-        print("The orchestrator will start normally after optimization.")
-        print("="*60 + "\n")
+    print("\n" + "="*60)
+    print("🎯 STARTING OPTIMIZATION IN BACKGROUND")
+    print("="*60)
+    print("The optimizer will run while the proxy continues operating.")
+    print("This will take ~2 hours to find optimal settings.")
+    print("="*60 + "\n")
+    
+    try:
+        # Run the optimizer
+        result = subprocess.run(
+            [sys.executable, '-u', str(Path(__file__).parent / 'optimize_rotation.py'), '--auto'],
+            cwd=Path(__file__).parent,
+            env={**os.environ, 'PYTHONUNBUFFERED': '1'}
+        )
         
-        try:
-            # Run the optimizer
-            import subprocess
-            result = subprocess.run(
-                [sys.executable, '-u', str(Path(__file__).parent / 'optimize_rotation.py'), '--auto'],
-                cwd=Path(__file__).parent,
-                env={**os.environ, 'PYTHONUNBUFFERED': '1'}
-            )
-            
-            if result.returncode == 0:
-                print("\n✅ Optimization complete! Reloading config with optimal settings...")
-                # Reload config to get updated settings
-                return load_config()
-            else:
-                print("\n⚠️ Optimization failed, using existing settings")
-                return config
-        except Exception as e:
-            print(f"\n⚠️ Optimization error: {e}")
-            print("Continuing with existing settings...")
-            return config
-    
-    return config
+        if result.returncode == 0:
+            print("\n✅ Optimization complete! Settings applied and orchestrator will use them on next rotation.")
+        else:
+            print("\n⚠️ Optimization failed or was cancelled")
+    except Exception as e:
+        print(f"\n⚠️ Optimization error: {e}")
 
 if __name__ == '__main__':
-    # Check if optimization should run first
-    config = check_and_run_optimization()
+    config = load_config()
     
     lan_ip = config['lan_bind_ip']
     auth_enabled = config['proxy']['auth_enabled']
@@ -1669,5 +1659,15 @@ if __name__ == '__main__':
     start_auto_rotation()
 
     print("="*60)
+    
+    # Check if optimization should run
+    should_optimize = config.get('rotation', {}).get('run_optimization', False)
+    if should_optimize:
+        print("\n🎯 Optimization scheduled to run after API starts")
+        print("   Starting optimization in background thread...")
+        optimization_thread = threading.Thread(target=run_optimization_in_background, daemon=False)
+        optimization_thread.start()
+        print("   ✅ Optimization thread started (check logs for progress)")
+        print()
 
     app.run(host=config['api']['bind'], port=config['api']['port'])
