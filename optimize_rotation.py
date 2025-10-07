@@ -39,6 +39,65 @@ def save_config(config):
     with open(CONFIG_FILE, 'w') as f:
         yaml.safe_dump(config, f, sort_keys=False)
 
+def send_discord_optimization_report(best_config, control_results):
+    """Send optimization results to Discord."""
+    try:
+        config = load_config()
+        webhook_url = config.get('discord', {}).get('webhook_url', '').strip()
+        
+        if not webhook_url or webhook_url == "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN":
+            print("  ℹ️  Discord not configured, skipping notification")
+            return False
+        
+        metrics = best_config['metrics']
+        cfg = best_config['config']
+        
+        # Build description
+        description = f"""**🎯 Rotation Optimization Complete!**
+
+**Recommended Settings:**
+• Teardown Wait: `{cfg['teardown_wait']}s`
+• Restart Wait: `{cfg['restart_wait']}s`
+• Configuration: {cfg['description']}
+
+**Performance:**
+• Unique IPs: **{metrics['unique_ips']}** IPs obtained
+• Efficiency: **{metrics['ips_per_hour']:.2f}** IPs per hour
+• Success Rate: **{metrics['success_rate']}%**
+• Avg Time: **{metrics['avg_time_per_rotation']/60:.1f}** minutes per rotation
+
+**Baseline (Control Test):**
+• Natural changes: {control_results['natural_changes']}
+• Natural rate: {control_results['changes_per_hour']:.2f} IPs/hour
+
+✅ Settings automatically applied to config.yaml
+✅ Optimization disabled (won't run again)
+✅ Auto-rotation re-enabled
+"""
+        
+        embed = {
+            "title": "🎯 IP Rotation Optimization Complete",
+            "description": description,
+            "color": 0x00ff00,  # Green
+            "footer": {"text": f"4G Proxy Optimizer • {datetime.now().strftime('%d/%m/%Y %H:%M')}"},
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        payload = {
+            "content": None,
+            "embeds": [embed],
+            "allowed_mentions": {"parse": []}
+        }
+        
+        response = requests.post(webhook_url, json=payload, timeout=20)
+        response.raise_for_status()
+        print("  ✅ Discord notification sent!")
+        return True
+        
+    except Exception as e:
+        print(f"  ⚠️ Discord notification failed: {e}")
+        return False
+
 def get_api_token():
     config = load_config()
     return config.get('api', {}).get('token', '')
@@ -465,6 +524,10 @@ def run_optimization(auto_start=False):
             print("✅ Settings applied and optimization flag disabled (won't run again)")
         else:
             print("✅ Settings applied! Restart orchestrator with: pm2 restart 4g-proxy-orchestrator")
+        
+        # Send Discord notification with results
+        print("\n📱 Sending optimization report to Discord...")
+        send_discord_optimization_report(best, control_results)
     else:
         print("Skipped. You can manually apply settings from the report above.")
     
