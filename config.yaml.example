@@ -60,6 +60,13 @@ rotation:
   # Increase to 120-240 for better IP variety with CGNAT carriers
   ppp_restart_wait: 240
   
+  # Randomise IMEI on each rotation (helps get different IPs)
+  # Set to true to change IMEI each rotation for maximum IP variety
+  # Set to false to keep original IMEI (default, safer)
+  # ⚠️ WARNING: Changing IMEI may be illegal in some jurisdictions
+  # Only enable if you understand the legal implications in your region
+  randomise_imei: false
+  
   # Deep reset settings (RNDIS mode always uses deep reset on attempt 2)
   # For PPP mode only:
   # Set to true to enable deep reset (more reliable IP changes)

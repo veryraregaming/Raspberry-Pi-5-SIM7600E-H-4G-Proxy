@@ -37,6 +37,7 @@ STATE_DIR = Path(__file__).parent / "state"
 STATE_DIR.mkdir(exist_ok=True)
 MSG_ID_PATH = STATE_DIR / "discord_message_id.txt"
 IP_HISTORY_PATH = STATE_DIR / "ip_history.json"
+ORIGINAL_IMEI_PATH = STATE_DIR / "original_imei.txt"
 
 # ========= Config =========
 
@@ -403,10 +404,134 @@ def detect_qmi_interface():
         traceback.print_exc()
     return None, False
 
-def deep_reset_qmi_modem():
+def get_original_imei():
+    """Get the original (factory) IMEI from state file."""
+    try:
+        if ORIGINAL_IMEI_PATH.exists():
+            return ORIGINAL_IMEI_PATH.read_text(encoding="utf-8").strip()
+        return None
+    except Exception:
+        return None
+
+def save_original_imei(imei):
+    """Save the original (factory) IMEI to state file."""
+    try:
+        if imei and imei != "Unknown" and len(imei) == 15:
+            ORIGINAL_IMEI_PATH.write_text(imei, encoding="utf-8")
+            print(f"  💾 Saved original IMEI: {imei}")
+            return True
+    except Exception as e:
+        print(f"  ⚠️ Could not save original IMEI: {e}")
+    return False
+
+def get_current_imei():
+    """Get current IMEI from modem."""
+    try:
+        # Find the modem control device
+        modem_dev = "/dev/ttyUSB2"  # Default for SIM7600E-H
+        if not os.path.exists(modem_dev):
+            modem_dev = "/dev/ttyUSB0"
+        
+        if not os.path.exists(modem_dev):
+            return "Unknown"
+        
+        # Try AT+GSN command (standard IMEI query)
+        response = at("AT+GSN", port=modem_dev, read_delay=1.0, timeout=2)
+        if response:
+            # Parse IMEI from response (usually just the IMEI number)
+            lines = response.strip().split('\n')
+            for line in lines:
+                line = line.strip()
+                # IMEI is typically 15 digits
+                if line and line.isdigit() and len(line) == 15:
+                    # Save as original if not already saved
+                    if not get_original_imei():
+                        save_original_imei(line)
+                    return line
+                # Sometimes it's in format +GSN: XXXXXX
+                if '+GSN:' in line:
+                    imei = line.split(':')[1].strip()
+                    if imei.isdigit() and len(imei) == 15:
+                        # Save as original if not already saved
+                        if not get_original_imei():
+                            save_original_imei(imei)
+                        return imei
+        
+        # Fallback: try AT+CGSN
+        response = at("AT+CGSN", port=modem_dev, read_delay=1.0, timeout=2)
+        if response:
+            lines = response.strip().split('\n')
+            for line in lines:
+                line = line.strip()
+                if line and line.isdigit() and len(line) == 15:
+                    # Save as original if not already saved
+                    if not get_original_imei():
+                        save_original_imei(line)
+                    return line
+        
+        return "Unknown"
+    except Exception as e:
+        print(f"Error getting IMEI: {e}")
+        return "Unknown"
+
+def randomise_imei():
+    """Generate and set a random IMEI to help get different IPs."""
+    try:
+        import random
+        
+        # Generate random IMEI: 35000000 + 8 random digits
+        random_suffix = random.randint(10000000, 99999999)
+        random_imei = f"35000000{random_suffix}"
+        
+        print(f"📱 Setting random IMEI: {random_imei}")
+        
+        # Find the modem control device
+        modem_dev = "/dev/ttyUSB2"  # Default for SIM7600E-H
+        if not os.path.exists(modem_dev):
+            print(f"⚠️ Modem device {modem_dev} not found, trying /dev/ttyUSB0")
+            modem_dev = "/dev/ttyUSB0"
+        
+        if not os.path.exists(modem_dev):
+            print("⚠️ No modem control device found for IMEI change")
+            return False
+        
+        with serial.Serial(modem_dev, 115200, timeout=5) as ser:
+            # Set new IMEI
+            ser.write(f'AT+EGMR=1,7,"{random_imei}"\r\n'.encode())
+            time.sleep(2)
+            response = ser.read_all().decode(errors='ignore')
+            print(f"  📡 IMEI set response: {response.strip()}")
+            
+            # Reset modem to apply IMEI change
+            print("  📡 Rebooting modem to apply new IMEI...")
+            ser.write(b"AT+CFUN=1,1\r\n")
+            time.sleep(2)
+            ser.read_all()
+        
+        print("  ⏱️ Waiting 30 seconds for modem to reboot...")
+        time.sleep(30)
+        print("  ✅ IMEI randomisation complete")
+        return True
+        
+    except Exception as e:
+        print(f"  ⚠️ IMEI randomisation failed: {e}")
+        return False
+
+def deep_reset_qmi_modem(randomise_imei_enabled=False):
     """Deep reset modem using AT commands to force new IP."""
     try:
         print("🔄 Performing deep QMI modem reset (radio + PDP context)...")
+        
+        # Randomise IMEI first if enabled (before any other operations)
+        if randomise_imei_enabled:
+            print("📱 Step 1: Randomising IMEI...")
+            if randomise_imei():
+                print("  ✅ IMEI changed successfully, modem already rebooted")
+                # Wait a bit more for modem to stabilise after reboot
+                print("  ⏱️ Waiting 15 seconds for modem to stabilise...")
+                time.sleep(15)
+            else:
+                print("  ⚠️ IMEI change failed, continuing with standard reset...")
 
         # Find the modem control device
         modem_dev = "/dev/ttyUSB2"  # Default for SIM7600E-H
@@ -462,7 +587,7 @@ def deep_reset_qmi_modem():
         print(f"⚠️ Deep reset failed: {e}")
         return False
 
-def teardown_qmi(wait_s: int, deep_reset: bool = False):
+def teardown_qmi(wait_s: int, deep_reset: bool = False, randomise_imei_enabled: bool = False):
     """Tear down QMI interface properly releasing IP."""
     iface, _ = detect_qmi_interface()
     if iface:
@@ -484,7 +609,7 @@ def teardown_qmi(wait_s: int, deep_reset: bool = False):
 
         # Perform deep reset if requested
         if deep_reset:
-            deep_reset_qmi_modem()
+            deep_reset_qmi_modem(randomise_imei_enabled=randomise_imei_enabled)
             wait_s = max(wait_s, 30)  # Add extra wait after deep reset
 
         print(f"Waiting {wait_s} seconds for QMI teardown...")
@@ -593,10 +718,21 @@ def detect_rndis_interface():
         traceback.print_exc()
     return None, False
 
-def deep_reset_rndis_modem():
+def deep_reset_rndis_modem(randomise_imei_enabled=False):
     """Deep reset modem radio to force new PDP context and better IP variety."""
     print("🔄 Performing deep modem reset (radio + PDP context)...")
     try:
+        # Randomise IMEI first if enabled (before any other operations)
+        if randomise_imei_enabled:
+            print("📱 Step 1: Randomising IMEI...")
+            if randomise_imei():
+                print("  ✅ IMEI changed successfully, modem already rebooted")
+                # Wait a bit more for modem to stabilise after reboot
+                print("  ⏱️ Waiting 15 seconds for modem to stabilise...")
+                time.sleep(15)
+            else:
+                print("  ⚠️ IMEI change failed, continuing with standard reset...")
+        
         at_port = detect_modem_port()
         if not at_port or not os.path.exists(at_port):
             print(f"⚠️ Deep reset skipped: AT port {at_port} not available")
@@ -645,7 +781,7 @@ def deep_reset_rndis_modem():
         print(f"  ⚠️ Deep modem reset failed: {e}")
         return False
 
-def teardown_rndis(wait_s: int, deep_reset: bool = False):
+def teardown_rndis(wait_s: int, deep_reset: bool = False, randomise_imei_enabled: bool = False):
     """Teardown RNDIS interface by bringing it down."""
     iface, _ = detect_rndis_interface()
     if iface:
@@ -655,7 +791,7 @@ def teardown_rndis(wait_s: int, deep_reset: bool = False):
 
         if deep_reset:
             # Perform deep modem reset for better IP variety
-            deep_reset_rndis_modem()
+            deep_reset_rndis_modem(randomise_imei_enabled=randomise_imei_enabled)
             print(f"Waiting {wait_s} seconds after deep reset...")
         else:
             print(f"Waiting {wait_s} seconds for RNDIS teardown...")
@@ -787,15 +923,16 @@ def auto_rotation_worker():
                             teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
                             restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
                             max_attempts  = int(rotation_config.get('max_attempts', 2))
+                            randomise_imei_enabled = rotation_config.get('randomise_imei', False)
 
-            for attempt in range(max_attempts):
-                print(f"Auto-rotation: QMI Rotation Attempt {attempt + 1}/{max_attempts}")
+                            for attempt in range(max_attempts):
+                                print(f"Auto-rotation: QMI Rotation Attempt {attempt + 1}/{max_attempts}")
 
-                # Always use deep reset for better IP variety with sticky CGNAT
-                use_deep_reset = True
-                print(f"Auto-rotation: Using deep reset for better IP variety")
+                                # Always use deep reset for better IP variety with sticky CGNAT
+                                use_deep_reset = True
+                                print(f"Auto-rotation: Using deep reset for better IP variety")
 
-                teardown_qmi(teardown_wait, deep_reset=use_deep_reset)
+                                teardown_qmi(teardown_wait, deep_reset=use_deep_reset, randomise_imei_enabled=randomise_imei_enabled)
 
                                 try:
                                     start_qmi()
@@ -845,15 +982,16 @@ def auto_rotation_worker():
                             teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
                             restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
                             max_attempts  = int(rotation_config.get('max_attempts', 2))
+                            randomise_imei_enabled = rotation_config.get('randomise_imei', False)
 
-            for attempt in range(max_attempts):
-                print(f"Auto-rotation: RNDIS Rotation Attempt {attempt + 1}/{max_attempts}")
+                            for attempt in range(max_attempts):
+                                print(f"Auto-rotation: RNDIS Rotation Attempt {attempt + 1}/{max_attempts}")
 
-                # Always use deep reset for better IP variety with sticky CGNAT
-                use_deep_reset = True
-                print(f"Auto-rotation: Using deep reset for better IP variety")
+                                # Always use deep reset for better IP variety with sticky CGNAT
+                                use_deep_reset = True
+                                print(f"Auto-rotation: Using deep reset for better IP variety")
 
-                teardown_rndis(teardown_wait, deep_reset=use_deep_reset)
+                                teardown_rndis(teardown_wait, deep_reset=use_deep_reset, randomise_imei_enabled=randomise_imei_enabled)
 
                                 try:
                                     start_rndis()
@@ -978,13 +1116,27 @@ def status():
     except Exception:
         pass
 
+    # Get IMEI information
+    current_imei = get_current_imei()
+    original_imei = get_original_imei()
+    
+    # Check if IMEI has been spoofed
+    imei_spoofed = False
+    if original_imei and current_imei != "Unknown" and original_imei != current_imei:
+        imei_spoofed = True
+
     return jsonify({
         'pdp': pdp,
         'public_ip': pub,
         'ppp_up': up,  # Keep for backwards compatibility
         'connection_mode': connection_mode,
         'interface': interface_name,
-        'connected': up
+        'connected': up,
+        'imei': {
+            'current': current_imei,
+            'original': original_imei or "Not recorded",
+            'spoofed': imei_spoofed
+        }
     })
 
 @app.post('/rotate')
@@ -1038,8 +1190,9 @@ def rotate():
             teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
             restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
             max_attempts  = int(rotation_config.get('max_attempts', 2))
+            randomise_imei_enabled = rotation_config.get('randomise_imei', False)
 
-            print(f"QMI rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, max_attempts={max_attempts}")
+            print(f"QMI rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, max_attempts={max_attempts}, randomise_imei={'enabled' if randomise_imei_enabled else 'disabled'}")
 
             for attempt in range(max_attempts):
                 print(f"\n--- QMI Rotation Attempt {attempt + 1}/{max_attempts} ---")
@@ -1048,7 +1201,7 @@ def rotate():
                 use_deep_reset = True
                 print(f"Using deep reset for better IP variety (sticky CGNAT workaround)")
 
-                teardown_qmi(teardown_wait, deep_reset=use_deep_reset)
+                teardown_qmi(teardown_wait, deep_reset=use_deep_reset, randomise_imei_enabled=randomise_imei_enabled)
 
                 try:
                     start_qmi()
@@ -1114,8 +1267,9 @@ def rotate():
             teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
             restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
             max_attempts  = int(rotation_config.get('max_attempts', 2))
+            randomise_imei_enabled = rotation_config.get('randomise_imei', False)
 
-            print(f"RNDIS rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, max_attempts={max_attempts}")
+            print(f"RNDIS rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, max_attempts={max_attempts}, randomise_imei={'enabled' if randomise_imei_enabled else 'disabled'}")
 
             for attempt in range(max_attempts):
                 print(f"\n--- RNDIS Rotation Attempt {attempt + 1}/{max_attempts} ---")
@@ -1124,7 +1278,7 @@ def rotate():
                 use_deep_reset = True
                 print(f"Using deep reset for better IP variety (sticky CGNAT workaround)")
 
-                teardown_rndis(teardown_wait, deep_reset=use_deep_reset)
+                teardown_rndis(teardown_wait, deep_reset=use_deep_reset, randomise_imei_enabled=randomise_imei_enabled)
 
                 try:
                     start_rndis()

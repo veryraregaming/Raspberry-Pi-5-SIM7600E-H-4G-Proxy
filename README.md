@@ -129,7 +129,65 @@ pm2:
   restart_delay: 5000         # Delay between restarts (ms)
 discord:
   webhook_url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN"  # Discord notifications
+rotation:
+  max_attempts: 3             # Number of rotation attempts
+  ppp_teardown_wait: 60       # Wait time after interface down (seconds)
+  ppp_restart_wait: 240       # Wait time for new IP assignment (seconds)
+  randomise_imei: false       # ⚠️ Change IMEI on each rotation (see warning below)
 ```
+
+### ⚠️ IMEI Randomisation (Advanced)
+
+**New Feature**: Automatically randomise your modem's IMEI on each IP rotation for maximum IP variety.
+
+#### **What is IMEI Randomisation?**
+- Changes your modem's IMEI (device identifier) on each rotation
+- Helps avoid sticky CGNAT and get more diverse IP addresses
+- Carrier networks often assign the same IP to the same IMEI
+- Changing IMEI can significantly improve IP rotation success
+
+#### **How to Enable**
+Edit `config.yaml`:
+```yaml
+rotation:
+  randomise_imei: true  # Enable IMEI randomisation
+```
+
+#### **⚠️ LEGAL WARNING**
+**Changing IMEI may be ILLEGAL in some jurisdictions:**
+- ❌ **Illegal in UK** - Under the Mobile Telephones (Re-programming) Act 2002
+- ❌ **Illegal in USA** - Under federal law in many states
+- ❌ **Check your local laws** before enabling this feature
+- ⚠️ **Use at your own risk** - This feature is for educational/testing purposes only
+- 🛡️ **We are not responsible** for any legal consequences
+
+#### **Manual IMEI Change (Testing)**
+For testing or one-off changes:
+```bash
+# Run the standalone script
+sudo bash scripts/randomise_imei.sh
+
+# This will:
+# - Generate random IMEI (35000000XXXXXXXX)
+# - Apply to modem via AT command
+# - Reboot modem
+# - Wait for modem to stabilise
+```
+
+#### **Technical Details**
+- Generates IMEI starting with `35000000` + 8 random digits
+- Uses `AT+EGMR=1,7,"IMEI"` command
+- Reboots modem with `AT+CFUN=1,1` to apply
+- Adds ~45 seconds to rotation time
+- Works with SIM7600 series modems
+
+#### **IMEI Tracking in Web Interface**
+The web dashboard displays both IMEIs:
+- **Original IMEI** - Factory IMEI (automatically saved on first detection)
+- **Current IMEI** - Active IMEI (updates after each change)
+- **Status Badge** - Shows "✅ Original IMEI" or "⚠️ IMEI Spoofed"
+- Refreshes automatically every 30 seconds
+- Helps you track when IMEI randomisation is active
 
 ## 📱 Discord Notifications
 
@@ -191,6 +249,7 @@ Open your browser and go to: `http://YOUR_PI_IP:5000`
 
 ### **Dashboard Features**
 - **📊 Real-time Status** - Current IP, connection status, uptime
+- **📱 IMEI Display** - Shows both original (factory) and current (spoofed) IMEI
 - **🔄 IP Rotation** - One-click IP rotation with success/failure feedback
 - **📋 IP History** - Visual history of all IP changes with timestamps
 - **📱 Discord Notifications** - Send manual notifications

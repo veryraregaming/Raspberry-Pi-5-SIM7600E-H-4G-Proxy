@@ -290,6 +290,16 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
 
+                <!-- Modem Information -->
+                <div class="card">
+                    <h3>📱 Modem IMEI</h3>
+                    <div id="modem-info">
+                        <p><strong>Original IMEI:</strong> <span id="original-imei" style="font-family: 'Courier New', monospace; color: #667eea;">Loading...</span></p>
+                        <p><strong>Current IMEI:</strong> <span id="current-imei" style="font-family: 'Courier New', monospace; color: #667eea;">Loading...</span></p>
+                        <p id="imei-status-text"></p>
+                    </div>
+                </div>
+
                 <!-- Controls -->
                 <div class="card">
                     <h3>🎮 Controls</h3>
@@ -365,6 +375,21 @@ HTML_TEMPLATE = """
             document.getElementById('connection-status').className = 'status ' + (data.connected ? 'success' : 'error');
             document.getElementById('connection-mode').textContent = data.connection_mode || 'Unknown';
             document.getElementById('interface-name').textContent = data.interface || 'Unknown';
+            
+            // Update IMEI information
+            if (data.imei) {
+                document.getElementById('original-imei').textContent = data.imei.original || 'Not recorded';
+                document.getElementById('current-imei').textContent = data.imei.current || 'Unknown';
+                
+                const statusText = document.getElementById('imei-status-text');
+                if (data.imei.spoofed) {
+                    statusText.innerHTML = '<span class="status warning">⚠️ IMEI Spoofed</span>';
+                } else if (data.imei.current !== 'Unknown' && data.imei.original !== 'Not recorded') {
+                    statusText.innerHTML = '<span class="status success">✅ Original IMEI</span>';
+                } else {
+                    statusText.innerHTML = '';
+                }
+            }
         }
         
         async function loadHistory() {
