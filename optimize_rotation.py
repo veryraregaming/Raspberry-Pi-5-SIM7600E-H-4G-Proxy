@@ -27,6 +27,10 @@ TEST_CONFIGS = [
     (120, 180, 3, "Aggressive (5min per rotation)"),
 ]
 
+# Control test: measure natural IP changes
+CONTROL_TEST_DURATION = 1800  # 30 minutes
+CONTROL_CHECK_INTERVAL = 300  # Check every 5 minutes
+
 def load_config():
     with open(CONFIG_FILE, 'r') as f:
         return yaml.safe_load(f)
@@ -93,6 +97,72 @@ def update_rotation_config(teardown_wait, restart_wait):
     
     save_config(config)
     print(f"  📝 Updated config: teardown={teardown_wait}s, restart={restart_wait}s")
+
+def run_control_test():
+    """Run control test to measure natural IP changes without rotation."""
+    print(f"\n{'='*70}")
+    print(f"🔬 CONTROL TEST: Measuring Natural IP Changes")
+    print(f"{'='*70}")
+    print(f"Duration: {CONTROL_TEST_DURATION/60:.0f} minutes")
+    print(f"Check interval: {CONTROL_CHECK_INTERVAL/60:.0f} minutes")
+    print(f"This establishes a baseline for natural carrier IP changes.")
+    print(f"{'='*70}\n")
+    
+    start_ip = get_current_ip()
+    print(f"  📍 Starting IP: {start_ip}")
+    print(f"  ⏱️ Starting control observation...")
+    
+    ips_observed = {start_ip}
+    observations = [{
+        'time': 0,
+        'ip': start_ip
+    }]
+    
+    checks = int(CONTROL_TEST_DURATION / CONTROL_CHECK_INTERVAL)
+    
+    for i in range(1, checks + 1):
+        print(f"\n  💤 Waiting {CONTROL_CHECK_INTERVAL/60:.0f} minutes... ({i}/{checks})")
+        time.sleep(CONTROL_CHECK_INTERVAL)
+        
+        current_ip = get_current_ip()
+        elapsed = i * CONTROL_CHECK_INTERVAL
+        
+        observations.append({
+            'time': elapsed,
+            'ip': current_ip
+        })
+        
+        if current_ip != list(ips_observed)[-1]:
+            ips_observed.add(current_ip)
+            print(f"  🔄 IP Changed naturally: {current_ip} (at {elapsed/60:.0f} min)")
+        else:
+            print(f"  ✓ IP Stable: {current_ip}")
+    
+    natural_changes = len(ips_observed) - 1
+    change_rate = (natural_changes / (CONTROL_TEST_DURATION / 3600))
+    
+    results = {
+        'duration_seconds': CONTROL_TEST_DURATION,
+        'observations': observations,
+        'unique_ips': list(ips_observed),
+        'natural_changes': natural_changes,
+        'changes_per_hour': round(change_rate, 2)
+    }
+    
+    print(f"\n  📊 Control Test Results:")
+    print(f"     Unique IPs observed: {len(ips_observed)}")
+    print(f"     Natural changes: {natural_changes}")
+    print(f"     Changes per hour: {change_rate:.2f}")
+    print(f"     Duration: {CONTROL_TEST_DURATION/60:.0f} minutes")
+    
+    if natural_changes == 0:
+        print(f"\n  ✅ No natural changes detected - carrier has sticky IPs")
+        print(f"     Any IP changes during testing are from our rotation!")
+    else:
+        print(f"\n  ⚠️ Natural IP changes detected!")
+        print(f"     We need at least {change_rate:.2f} changes/hour to be effective")
+    
+    return results
 
 def test_configuration(teardown_wait, restart_wait, test_count, description):
     """Test a specific configuration multiple times."""
@@ -185,19 +255,26 @@ def run_optimization():
     print("🚀 IP Rotation Optimizer")
     print("="*70)
     print("This will test different rotation timings to find the optimal settings.")
+    print("\n📊 Test Plan:")
+    print(f"  1. Control test: {CONTROL_TEST_DURATION/60:.0f} minutes (baseline measurement)")
+    print(f"  2. Configuration tests: {len(TEST_CONFIGS)} different timing configs")
     print(f"Total configurations to test: {len(TEST_CONFIGS)}")
     
-    estimated_time = sum(
+    estimated_time = CONTROL_TEST_DURATION + sum(
         (teardown + restart + 30) * count 
         for teardown, restart, count, _ in TEST_CONFIGS
     )
-    print(f"Estimated total time: {estimated_time/60:.1f} minutes ({estimated_time/3600:.1f} hours)")
+    print(f"\nEstimated total time: {estimated_time/60:.1f} minutes ({estimated_time/3600:.1f} hours)")
     print("="*70)
     
     input("\nPress Enter to start optimization... (or Ctrl+C to cancel)")
     
+    # Run control test first
+    control_results = run_control_test()
+    
     all_results = {
         'test_date': datetime.now().isoformat(),
+        'control_test': control_results,
         'configurations': []
     }
     
@@ -214,8 +291,32 @@ def run_optimization():
     print("🏁 OPTIMIZATION COMPLETE!")
     print(f"{'='*70}")
     
+    # Show control test baseline
+    control = all_results['control_test']
+    natural_rate = control['changes_per_hour']
+    
+    print(f"\n🔬 CONTROL TEST BASELINE:")
+    print(f"   Natural IP changes per hour: {natural_rate}")
+    print(f"   Unique IPs (no rotation): {len(control['unique_ips'])}")
+    
+    if natural_rate == 0:
+        print(f"   ✅ No natural changes - all rotation effects are from our settings!")
+    else:
+        print(f"   ⚠️ Carrier changes IPs naturally - configs must beat {natural_rate:.2f} IPs/hour")
+    
     # Analyze and recommend
     configs = all_results['configurations']
+    
+    # Filter configs that beat natural rate
+    effective_configs = [
+        cfg for cfg in configs 
+        if cfg['metrics']['ips_per_hour'] > natural_rate
+    ]
+    
+    if not effective_configs:
+        print(f"\n⚠️ WARNING: No configs beat the natural change rate!")
+        print(f"   This might mean the carrier changes IPs frequently on its own.")
+        effective_configs = configs  # Use all configs anyway
     
     # Sort by IPs per hour (efficiency)
     by_efficiency = sorted(configs, key=lambda x: x['metrics']['ips_per_hour'], reverse=True)
@@ -261,6 +362,16 @@ def run_optimization():
     print(f"  {best['metrics']['ips_per_hour']:.2f} IPs per hour")
     print(f"  {best['metrics']['success_rate']}% success rate")
     print(f"  {best['metrics']['avg_time_per_rotation']/60:.1f} minutes per rotation")
+    
+    # Compare to baseline
+    improvement = best['metrics']['ips_per_hour'] - natural_rate
+    if natural_rate > 0:
+        improvement_pct = (improvement / natural_rate) * 100
+        print(f"\nImprovement over natural baseline:")
+        print(f"  +{improvement:.2f} IPs/hour ({improvement_pct:+.1f}% improvement)")
+    else:
+        print(f"\nImprovement over baseline: {best['metrics']['ips_per_hour']:.2f} IPs/hour")
+        print(f"  (vs 0 natural changes)")
     
     print(f"\n{'='*70}")
     print(f"📄 Full results saved to: {RESULTS_FILE}")
