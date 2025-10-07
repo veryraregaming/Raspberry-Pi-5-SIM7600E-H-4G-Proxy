@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-import os, time, requests, serial, yaml, json, subprocess, threading
+import os
+import time
+import requests
+import serial
+import yaml
+import json
+import subprocess
+import threading
 from flask import Flask, request, jsonify, abort
 from datetime import datetime
 from pathlib import Path
@@ -72,7 +79,7 @@ def save_ip_history(history):
 def update_ip_history(current_ip, force_add=False, is_failure=False):
     """
     Update IP history with current IP.
-    
+
     Args:
         current_ip: The current IP address
         force_add: If True, always add entry even if IP is the same (for failed rotations)
@@ -80,7 +87,7 @@ def update_ip_history(current_ip, force_add=False, is_failure=False):
     """
     history = load_ip_history()
     now = datetime.now().isoformat()
-    
+
     # Add entry if IP changed OR if force_add is True (for failed rotation attempts)
     if force_add or not history["ips"] or history["ips"][-1]["ip"] != current_ip:
         entry = {
@@ -89,14 +96,14 @@ def update_ip_history(current_ip, force_add=False, is_failure=False):
             "time": datetime.now().strftime("%H:%M:%S"),
             "date": datetime.now().strftime("%d/%m/%Y")
         }
-        
+
         # Add failure flag if this is a failed rotation
         if is_failure:
             entry["failed"] = True
             entry["note"] = "Rotation Failed - Same IP"
-        
+
         history["ips"].append(entry)
-        
+
         if history["first_seen"] is None:
             history["first_seen"] = now
         elif len(history["ips"]) > 1 or force_add:
@@ -181,11 +188,15 @@ def ensure_ppp_default_route():
         gw = dev = None
         metric = 100
         for i, p in enumerate(parts):
-            if p == "via" and i+1 < len(parts): gw = parts[i+1]
-            if p == "dev" and i+1 < len(parts): dev = parts[i+1]
+            if p == "via" and i+1 < len(parts):
+                gw = parts[i+1]
+            if p == "dev" and i+1 < len(parts):
+                dev = parts[i+1]
             if p == "metric" and i+1 < len(parts):
-                try: metric = int(parts[i+1])
-                except: pass
+                try:
+                    metric = int(parts[i+1])
+                except Exception:
+                    pass
         if dev and dev != "ppp0":
             subprocess.run([SUDO_PATH, "-n", IP_PATH, "route", "replace", "default",
                             "via", gw, "dev", dev, "metric", str(metric)],
@@ -205,29 +216,29 @@ def ensure_ppp_default_route():
 def get_current_ip():
     """Get current public IPv4 address via cellular interface only."""
     global in_progress
-    
+
     # If rotation is in progress, return "Rotating..." to avoid showing WiFi IP
     if in_progress:
         return "Rotating..."
-    
+
     # Check for QMI interface first
     qmi_iface, qmi_has_ip = detect_qmi_interface()
-    
+
     # If QMI is down, check for RNDIS
     if not (qmi_iface and qmi_has_ip):
         rndis_iface, rndis_has_ip = detect_rndis_interface()
-        
+
         # If RNDIS is also down, check for PPP
         if not (rndis_iface and rndis_has_ip):
             try:
-                r = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"], 
-                                 capture_output=True, text=True, timeout=3)
+                r = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"],
+                                   capture_output=True, text=True, timeout=3)
                 if r.returncode != 0 or "inet " not in r.stdout:
                     # No cellular interface is up
                     return "Unknown"
-    except Exception:
+            except Exception:
                 return "Unknown"
-    
+
     # Cellular interface is up, check public IP via proxy
     try:
         # Use proxy to ensure we're checking cellular IP, not WiFi
@@ -240,15 +251,20 @@ def get_current_ip():
         }
         r = requests.get('https://api.ipify.org', proxies=proxies, timeout=10)
         ip = r.text.strip()
-        
+
         # Verify this is a public IP (not private/home network)
-        if ip.startswith('192.168.') or ip.startswith('10.') or ip.startswith('172.') or ip.startswith('86.151.'):
+        if (
+            ip.startswith('192.168.')
+            or ip.startswith('10.')
+            or ip.startswith('172.')
+            or ip.startswith('86.151.')
+        ):
             return "Unknown"
-        
+
         return ip
-        except Exception:
+    except Exception:
         # If proxy fails, return Unknown (don't fallback to WiFi)
-            return "Unknown"
+        return "Unknown"
 
 # ========= Discord =========
 
@@ -328,10 +344,10 @@ def send_discord_notification(current_ip, previous_ip=None, is_rotation=False, i
     webhook_url = config.get('discord', {}).get('webhook_url', '').strip()
     if not webhook_url or webhook_url == "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN":
         return False
-    
+
     # Note: History update is now handled in rotation code before calling this function
     # This ensures the embed includes the latest entry (including failures)
-    
+
     try:
         payload = build_discord_embed(current_ip, previous_ip, is_rotation, is_failure, error_message)
         action, msg_id = post_or_patch_discord(webhook_url, payload, MSG_ID_PATH)
@@ -347,16 +363,16 @@ def detect_qmi_interface():
     """Detect QMI interface (wwan*) that provides cellular connectivity."""
     try:
         ip_cmd = IP_PATH if IP_PATH and os.path.exists(IP_PATH) else "/usr/sbin/ip"
-        
-        result = subprocess.run([ip_cmd, "-br", "link", "show"], 
-                               capture_output=True, text=True, check=False, timeout=5)
+
+        result = subprocess.run([ip_cmd, "-br", "link", "show"],
+                                capture_output=True, text=True, check=False, timeout=5)
         if result.returncode != 0:
             print(f"detect_qmi_interface: ip link failed: {result.stderr}")
             return None, False
-        
+
         print(f"detect_qmi_interface: Checking interfaces...")
         print(f"detect_qmi_interface: Output: {result.stdout[:200]}")
-            
+
         for line in result.stdout.splitlines():
             line = line.strip()
             if line.startswith("wwan"):
@@ -365,21 +381,21 @@ def detect_qmi_interface():
                     continue
                 iface = parts[0]
                 print(f"detect_qmi_interface: Found interface {iface}")
-                
+
                 # Check if interface has an IP address
                 ip_result = subprocess.run([ip_cmd, "-4", "addr", "show", iface],
-                                          capture_output=True, text=True, check=False, timeout=5)
+                                           capture_output=True, text=True, check=False, timeout=5)
                 if ip_result.returncode != 0:
                     print(f"detect_qmi_interface: ip addr failed for {iface}: {ip_result.stderr}")
                     return iface, False
-                    
+
                 if "inet " in ip_result.stdout:
                     print(f"detect_qmi_interface: Interface {iface} has IP")
                     return iface, True
                 else:
                     print(f"detect_qmi_interface: Interface {iface} has no IP")
                     return iface, False
-                    
+
         print("detect_qmi_interface: No QMI interfaces found in output")
     except Exception as e:
         print(f"detect_qmi_interface: Exception: {e}")
@@ -391,57 +407,57 @@ def deep_reset_qmi_modem():
     """Deep reset modem using AT commands to force new IP."""
     try:
         print("🔄 Performing deep QMI modem reset (radio + PDP context)...")
-        
+
         # Find the modem control device
         modem_dev = "/dev/ttyUSB2"  # Default for SIM7600E-H
         if not os.path.exists(modem_dev):
             print(f"⚠️ Modem device {modem_dev} not found, trying /dev/ttyUSB0")
             modem_dev = "/dev/ttyUSB0"
-        
+
         if not os.path.exists(modem_dev):
             print("⚠️ No modem control device found")
             return False
-        
+
         with serial.Serial(modem_dev, 115200, timeout=5) as ser:
             # 1. Deactivate PDP context
             print("📡 Deactivating PDP context...")
             ser.write(b"AT+CGACT=0,1\r\n")
             time.sleep(2)
             ser.read(1000)
-            
+
             # 2. Detach from network
             print("📡 Detaching from network...")
             ser.write(b"AT+CGATT=0\r\n")
             time.sleep(2)
             ser.read(1000)
-            
+
             # 3. Radio off
             print("📴 Radio off...")
             ser.write(b"AT+CFUN=0\r\n")
             time.sleep(5)
             ser.read(1000)
-            
+
             # 4. Radio on
             print("📡 Radio on...")
             ser.write(b"AT+CFUN=1\r\n")
             time.sleep(5)
             ser.read(1000)
-            
+
             # 5. Reattach to network
             print("📡 Reattaching to network...")
             ser.write(b"AT+CGATT=1\r\n")
             time.sleep(2)
             ser.read(1000)
-            
+
             # 6. Reactivate PDP context
             print("📡 Reactivating PDP context...")
             ser.write(b"AT+CGACT=1,1\r\n")
             time.sleep(2)
             ser.read(1000)
-            
+
         print("✅ Deep QMI modem reset complete")
         return True
-        
+
     except Exception as e:
         print(f"⚠️ Deep reset failed: {e}")
         return False
@@ -451,7 +467,7 @@ def teardown_qmi(wait_s: int, deep_reset: bool = False):
     iface, _ = detect_qmi_interface()
     if iface:
         print(f"Bringing down QMI interface: {iface}")
-        
+
         # Stop QMI network connection (properly releases IP from carrier)
         print("  📡 Stopping QMI network (releasing IP)...")
         qmi_dev = "/dev/cdc-wdm0"
@@ -461,16 +477,16 @@ def teardown_qmi(wait_s: int, deep_reset: bool = False):
             "--client-no-release-cid"
         ], capture_output=True, text=True, check=False, timeout=10)
         time.sleep(2)
-        
+
         # Bring interface down
         subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "down"],
-                      capture_output=True, text=True, check=False)
-        
+                       capture_output=True, text=True, check=False)
+
         # Perform deep reset if requested
         if deep_reset:
             deep_reset_qmi_modem()
             wait_s = max(wait_s, 30)  # Add extra wait after deep reset
-        
+
         print(f"Waiting {wait_s} seconds for QMI teardown...")
         time.sleep(wait_s)
     else:
@@ -481,21 +497,21 @@ def start_qmi():
     iface, has_ip = detect_qmi_interface()
     if not iface:
         raise RuntimeError("No QMI interface found")
-    
+
     print(f"Starting QMI connection for: {iface}")
-    
+
     # Bring interface up
     res = subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "up"],
-                        capture_output=True, text=True, check=False)
+                         capture_output=True, text=True, check=False)
     if res.returncode != 0:
         raise RuntimeError(f"Failed to bring up {iface}: {res.stderr.strip()}")
-    
+
     time.sleep(2)
-    
+
     # Get APN from config
     config = load_config()
     apn = config.get('modem', {}).get('apn', 'everywhere')
-    
+
     # Start QMI network connection (get fresh IP from carrier)
     print(f"  📡 Starting QMI network with APN: {apn} (getting new IP)...")
     qmi_dev = "/dev/cdc-wdm0"
@@ -504,20 +520,20 @@ def start_qmi():
         "--wds-start-network", f"apn={apn}",
         "--client-no-release-cid"
     ], capture_output=True, text=True, timeout=30, check=False)
-    
+
     if res.returncode != 0:
         raise RuntimeError(f"QMI network start failed: {res.stderr.strip()}")
-    
+
     time.sleep(3)
-    
+
     # Use udhcpc to get IP from modem (renew DHCP)
     print(f"  📡 Getting IP via DHCP for {iface}...")
     res = subprocess.run([SUDO_PATH, "-n", "udhcpc", "-i", iface, "-q"],
-                        capture_output=True, text=True, timeout=10, check=False)
-    
+                         capture_output=True, text=True, timeout=10, check=False)
+
     if res.returncode != 0:
         print(f"  ⚠️ udhcpc warning: {res.stderr.strip()}")
-    
+
     return iface
 
 def wait_for_qmi_up(timeout_s: int) -> bool:
@@ -537,16 +553,16 @@ def detect_rndis_interface():
     try:
         # Use absolute path to avoid subprocess issues
         ip_cmd = IP_PATH if IP_PATH and os.path.exists(IP_PATH) else "/usr/sbin/ip"
-        
-        result = subprocess.run([ip_cmd, "-br", "link", "show"], 
-                               capture_output=True, text=True, check=False, timeout=5)
+
+        result = subprocess.run([ip_cmd, "-br", "link", "show"],
+                                capture_output=True, text=True, check=False, timeout=5)
         if result.returncode != 0:
             print(f"detect_rndis_interface: ip link failed: {result.stderr}")
             return None, False
-        
+
         print(f"detect_rndis_interface: Checking interfaces...")
         print(f"detect_rndis_interface: Output: {result.stdout[:200]}")
-            
+
         for line in result.stdout.splitlines():
             line = line.strip()
             if line.startswith("enx") or line.startswith("eth1"):
@@ -555,21 +571,21 @@ def detect_rndis_interface():
                     continue
                 iface = parts[0]
                 print(f"detect_rndis_interface: Found interface {iface}")
-                
+
                 # Check if interface has an IP address
                 ip_result = subprocess.run([ip_cmd, "-4", "addr", "show", iface],
-                                          capture_output=True, text=True, check=False, timeout=5)
+                                           capture_output=True, text=True, check=False, timeout=5)
                 if ip_result.returncode != 0:
                     print(f"detect_rndis_interface: ip addr failed for {iface}: {ip_result.stderr}")
                     return iface, False
-                    
+
                 if "inet " in ip_result.stdout:
                     print(f"detect_rndis_interface: Interface {iface} has IP")
                     return iface, True
                 else:
                     print(f"detect_rndis_interface: Interface {iface} has no IP")
                     return iface, False
-                    
+
         print("detect_rndis_interface: No RNDIS interfaces found in output")
     except Exception as e:
         print(f"detect_rndis_interface: Exception: {e}")
@@ -585,44 +601,44 @@ def deep_reset_rndis_modem():
         if not at_port or not os.path.exists(at_port):
             print(f"⚠️ Deep reset skipped: AT port {at_port} not available")
             return False
-            
+
         with serial.Serial(at_port, 115200, timeout=5) as ser:
             # Deactivate PDP context
             print("  📡 Deactivating PDP context...")
             ser.write(b"AT+CGACT=0,1\r\n")
             time.sleep(2)
             ser.read_all()  # Clear buffer
-            
+
             # Detach from network
             print("  📡 Detaching from network...")
             ser.write(b"AT+CGATT=0\r\n")
             time.sleep(2)
             ser.read_all()
-            
+
             # Radio off
             print("  📴 Radio off...")
             ser.write(b"AT+CFUN=0\r\n")
             time.sleep(5)
             ser.read_all()
-            
+
             # Radio on
             print("  📡 Radio on...")
             ser.write(b"AT+CFUN=1\r\n")
             time.sleep(8)
             ser.read_all()
-            
+
             # Reattach to network
             print("  📡 Reattaching to network...")
             ser.write(b"AT+CGATT=1\r\n")
             time.sleep(2)
             ser.read_all()
-            
+
             # Reactivate PDP context
             print("  📡 Reactivating PDP context...")
             ser.write(b"AT+CGACT=1,1\r\n")
             time.sleep(2)
             ser.read_all()
-            
+
         print("  ✅ Deep modem reset complete")
         return True
     except Exception as e:
@@ -634,16 +650,16 @@ def teardown_rndis(wait_s: int, deep_reset: bool = False):
     iface, _ = detect_rndis_interface()
     if iface:
         print(f"Bringing down RNDIS interface: {iface}")
-        subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "down"], 
-                      check=False)
-        
+        subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "down"],
+                       check=False)
+
         if deep_reset:
             # Perform deep modem reset for better IP variety
             deep_reset_rndis_modem()
             print(f"Waiting {wait_s} seconds after deep reset...")
         else:
             print(f"Waiting {wait_s} seconds for RNDIS teardown...")
-        
+
         time.sleep(max(1, int(wait_s)))
     else:
         print("No RNDIS interface found, skipping teardown")
@@ -653,24 +669,24 @@ def start_rndis():
     iface, has_ip = detect_rndis_interface()
     if not iface:
         raise RuntimeError("No RNDIS interface found")
-    
+
     print(f"Bringing up RNDIS interface: {iface}")
     # Bring interface up
     res = subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "up"],
-                        capture_output=True, text=True, check=False)
+                         capture_output=True, text=True, check=False)
     if res.returncode != 0:
         raise RuntimeError(f"Failed to bring up {iface}: {res.stderr.strip()}")
-    
+
     time.sleep(2)
-    
+
     # Get IP via DHCP
     print(f"Getting IP via DHCP for {iface}...")
     res = subprocess.run([SUDO_PATH, "-n", "dhclient", "-v", iface],
-                        capture_output=True, text=True, timeout=30, check=False)
-    
+                         capture_output=True, text=True, timeout=30, check=False)
+
     if res.returncode != 0:
         raise RuntimeError(f"DHCP failed for {iface}: {res.stderr.strip()}")
-    
+
     return iface
 
 def wait_for_rndis_up(timeout_s: int) -> bool:
@@ -718,24 +734,24 @@ auto_rotation_enabled = True
 def auto_rotation_worker():
     """Background thread that performs automatic IP rotation."""
     global auto_rotation_enabled
-    
+
     while not auto_rotation_stop_event.is_set():
         try:
             config = load_config()
             interval = config.get('pm2', {}).get('ip_rotation_interval', 300)  # Default 5 minutes
-            
+
             if auto_rotation_enabled and interval > 0:
                 print(f"Auto-rotation: Waiting {interval} seconds until next rotation...")
-                
+
                 # Wait for the interval, but check for stop event periodically
                 for _ in range(interval):
                     if auto_rotation_stop_event.is_set():
                         return
                     time.sleep(1)
-                
+
                 if not auto_rotation_stop_event.is_set() and auto_rotation_enabled:
                     print("Auto-rotation: Triggering scheduled IP rotation...")
-                    
+
                     # Call the rotation function directly (bypass API auth)
                     try:
                         current_ip = get_current_ip()
@@ -747,7 +763,7 @@ def auto_rotation_worker():
                         # Check available interfaces
                         qmi_iface, qmi_has_ip = detect_qmi_interface()
                         rndis_iface, rndis_has_ip = detect_rndis_interface()
-                        
+
                         # Determine which mode to use
                         use_qmi = False
                         use_rndis = False
@@ -764,7 +780,7 @@ def auto_rotation_worker():
                                 use_qmi = True
                             elif rndis_iface:
                                 use_rndis = True
-                        
+
                         if use_qmi and qmi_iface:
                             print(f"Auto-rotation: Using QMI interface: {qmi_iface}")
                             rotation_config = config.get('rotation', {}) or {}
@@ -774,12 +790,12 @@ def auto_rotation_worker():
 
                             for attempt in range(max_attempts):
                                 print(f"Auto-rotation: QMI Rotation Attempt {attempt + 1}/{max_attempts}")
-                                
+
                                 # Use deep reset on second attempt for better IP variety
                                 use_deep_reset = (attempt > 0)
                                 if use_deep_reset:
                                     print(f"Auto-rotation: Using deep reset on attempt {attempt + 1}")
-                                
+
                                 teardown_qmi(teardown_wait, deep_reset=use_deep_reset)
 
                                 try:
@@ -805,11 +821,11 @@ def auto_rotation_worker():
                                 # Check if IP changed
                                 time.sleep(5)  # Give it a moment to stabilize
                                 new_ip = get_current_ip()
-                                
+
                                 # Update IP history regardless of success/failure
                                 if new_ip != "Unknown":
                                     update_ip_history(new_ip)
-                                
+
                                 if new_ip != previous_ip and new_ip != "Unknown":
                                     print(f"✅ Auto-rotation successful: {previous_ip} -> {new_ip}")
                                     send_discord_notification(new_ip, previous_ip, is_rotation=True)
@@ -823,7 +839,7 @@ def auto_rotation_worker():
                                     # Force add to history even though IP is same (to show failed rotation attempt)
                                     update_ip_history(new_ip, force_add=True, is_failure=True)
                                     send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
-                        
+
                         elif use_rndis and rndis_iface:
                             print(f"Auto-rotation: Using RNDIS interface: {rndis_iface}")
                             rotation_config = config.get('rotation', {}) or {}
@@ -833,12 +849,12 @@ def auto_rotation_worker():
 
                             for attempt in range(max_attempts):
                                 print(f"Auto-rotation: RNDIS Rotation Attempt {attempt + 1}/{max_attempts}")
-                                
+
                                 # Use deep reset on second attempt for better IP variety
                                 use_deep_reset = (attempt > 0)
                                 if use_deep_reset:
                                     print(f"Auto-rotation: Using deep reset on attempt {attempt + 1}")
-                                
+
                                 teardown_rndis(teardown_wait, deep_reset=use_deep_reset)
 
                                 try:
@@ -864,11 +880,11 @@ def auto_rotation_worker():
                                 # Check if IP changed
                                 time.sleep(5)  # Give it a moment to stabilize
                                 new_ip = get_current_ip()
-                                
+
                                 # Update IP history regardless of success/failure
                                 if new_ip != "Unknown":
                                     update_ip_history(new_ip)
-                                
+
                                 if new_ip != previous_ip and new_ip != "Unknown":
                                     print(f"✅ Auto-rotation successful: {previous_ip} -> {new_ip}")
                                     send_discord_notification(new_ip, previous_ip, is_rotation=True)
@@ -884,7 +900,7 @@ def auto_rotation_worker():
                                     send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
                         else:
                             print("Auto-rotation: No RNDIS interface found, skipping rotation")
-                            
+
                     except Exception as e:
                         err = f"Auto-rotation failed: {str(e)}"
                         print(f"Auto-rotation error: {err}")
@@ -896,7 +912,7 @@ def auto_rotation_worker():
             else:
                 # If disabled or interval is 0, wait longer and check again
                 time.sleep(60)
-                
+
         except Exception as e:
             print(f"Auto-rotation worker error: {e}")
             time.sleep(60)  # Wait before retrying
@@ -904,7 +920,7 @@ def auto_rotation_worker():
 def start_auto_rotation():
     """Start the auto-rotation background thread."""
     global auto_rotation_thread, auto_rotation_stop_event
-    
+
     if auto_rotation_thread is None or not auto_rotation_thread.is_alive():
         auto_rotation_stop_event.clear()
         auto_rotation_thread = threading.Thread(target=auto_rotation_worker, daemon=True)
@@ -914,7 +930,7 @@ def start_auto_rotation():
 def stop_auto_rotation():
     """Stop the auto-rotation background thread."""
     global auto_rotation_thread, auto_rotation_stop_event
-    
+
     if auto_rotation_thread and auto_rotation_thread.is_alive():
         auto_rotation_stop_event.set()
         auto_rotation_thread.join(timeout=5)
@@ -933,37 +949,37 @@ def set_auto_rotation_enabled(enabled):
 def status():
     pdp = at('AT+CGPADDR')
     pub = get_current_ip()
-    
+
     # Detect which connection mode is active
     connection_mode = "Unknown"
     interface_name = "Unknown"
     up = False
-    
-    # Check QMI first
-    qmi_iface, qmi_has_ip = detect_qmi_interface()
-    if qmi_iface and qmi_has_ip:
-        connection_mode = "QMI"
-        interface_name = qmi_iface
-        up = True
-    else:
-        # Check RNDIS
-        rndis_iface, rndis_has_ip = detect_rndis_interface()
-        if rndis_iface and rndis_has_ip:
-            connection_mode = "RNDIS"
-            interface_name = rndis_iface
+
+    try:
+        # Check QMI first
+        qmi_iface, qmi_has_ip = detect_qmi_interface()
+        if qmi_iface and qmi_has_ip:
+            connection_mode = "QMI"
+            interface_name = qmi_iface
             up = True
         else:
-            # Check PPP
-            try:
-                r = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"], 
-                                 capture_output=True, text=True, timeout=3)
+            # Check RNDIS
+            rndis_iface, rndis_has_ip = detect_rndis_interface()
+            if rndis_iface and rndis_has_ip:
+                connection_mode = "RNDIS"
+                interface_name = rndis_iface
+                up = True
+            else:
+                # Check PPP
+                r = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"],
+                                   capture_output=True, text=True, timeout=3)
                 if r.returncode == 0 and "inet " in r.stdout:
                     connection_mode = "PPP"
                     interface_name = "ppp0"
                     up = True
     except Exception:
         pass
-    
+
     return jsonify({
         'pdp': pdp,
         'public_ip': pub,
@@ -998,11 +1014,11 @@ def rotate():
         # Check available interfaces
         qmi_iface, qmi_has_ip = detect_qmi_interface()
         rndis_iface, rndis_has_ip = detect_rndis_interface()
-        
+
         # Determine which mode to use based on config and availability
         use_qmi = False
         use_rndis = False
-        
+
         if modem_mode == "qmi":
             use_qmi = True
         elif modem_mode == "rndis":
@@ -1016,7 +1032,8 @@ def rotate():
                 use_qmi = True
             elif rndis_iface:
                 use_rndis = True
-        
+
+        # ===== QMI path =====
         if use_qmi and qmi_iface:
             print(f"Using QMI interface: {qmi_iface}")
             rotation_config = config.get('rotation', {}) or {}
@@ -1028,12 +1045,12 @@ def rotate():
 
             for attempt in range(max_attempts):
                 print(f"\n--- QMI Rotation Attempt {attempt + 1}/{max_attempts} ---")
-                
+
                 # Use deep reset on second attempt for better IP variety
                 use_deep_reset = (attempt > 0)
                 if use_deep_reset:
                     print(f"Using deep reset on attempt {attempt + 1} for better IP variety")
-                
+
                 teardown_qmi(teardown_wait, deep_reset=use_deep_reset)
 
                 try:
@@ -1044,7 +1061,7 @@ def rotate():
                         err = f"QMI restart failed after {max_attempts} attempts"
                         print(f"IP rotation failed: {err}")
                         send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
-                        return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                        return jsonify({'status': 'failed', 'error': err, 'public_ip': current_ip, 'previous_ip': previous_ip}), 500
                     continue
 
                 total_wait = restart_wait
@@ -1055,17 +1072,17 @@ def rotate():
                         err = f"QMI interface failed to get IP after {max_attempts} attempts"
                         print(f"IP rotation failed: {err}")
                         send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
-                        return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                        return jsonify({'status': 'failed', 'error': err, 'public_ip': current_ip, 'previous_ip': previous_ip}), 500
                     continue
 
                 # Check if IP changed
                 time.sleep(5)  # Give it a moment to stabilize
                 new_ip = get_current_ip()
-                
+
                 # Update IP history regardless of success/failure
                 if new_ip != "Unknown":
                     update_ip_history(new_ip)
-                
+
                 if new_ip != previous_ip and new_ip != "Unknown":
                     print(f"✅ IP rotation successful on attempt {attempt + 1}: {previous_ip} -> {new_ip}")
                     send_discord_notification(new_ip, previous_ip, is_rotation=True)
@@ -1092,7 +1109,8 @@ def rotate():
                         'previous_ip': previous_ip,
                         'attempts': max_attempts
                     }), 400
-        
+
+        # ===== RNDIS path =====
         elif use_rndis and rndis_iface:
             print(f"Using RNDIS interface: {rndis_iface}")
             rotation_config = config.get('rotation', {}) or {}
@@ -1104,12 +1122,12 @@ def rotate():
 
             for attempt in range(max_attempts):
                 print(f"\n--- RNDIS Rotation Attempt {attempt + 1}/{max_attempts} ---")
-                
+
                 # Use deep reset on second attempt for better IP variety
                 use_deep_reset = (attempt > 0)
                 if use_deep_reset:
                     print(f"Using deep reset on attempt {attempt + 1} for better IP variety")
-                
+
                 teardown_rndis(teardown_wait, deep_reset=use_deep_reset)
 
                 try:
@@ -1120,7 +1138,7 @@ def rotate():
                         err = f"RNDIS restart failed after {max_attempts} attempts"
                         print(f"IP rotation failed: {err}")
                         send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
-                        return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                        return jsonify({'status': 'failed', 'error': err, 'public_ip': current_ip, 'previous_ip': previous_ip}), 500
                     continue
 
                 total_wait = restart_wait
@@ -1131,17 +1149,17 @@ def rotate():
                         err = f"RNDIS interface failed to get IP after {max_attempts} attempts"
                         print(f"IP rotation failed: {err}")
                         send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
-                        return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                        return jsonify({'status': 'failed', 'error': err, 'public_ip': current_ip, 'previous_ip': previous_ip}), 500
                     continue
 
                 # Check if IP changed
                 time.sleep(5)  # Give it a moment to stabilize
                 new_ip = get_current_ip()
-                
+
                 # Update IP history regardless of success/failure
                 if new_ip != "Unknown":
                     update_ip_history(new_ip)
-                
+
                 if new_ip != previous_ip and new_ip != "Unknown":
                     print(f"✅ IP rotation successful on attempt {attempt + 1}: {previous_ip} -> {new_ip}")
                     send_discord_notification(new_ip, previous_ip, is_rotation=True)
@@ -1168,130 +1186,133 @@ def rotate():
                         'previous_ip': previous_ip,
                         'attempts': max_attempts
                     }), 400
+
+        # ===== PPP fallback =====
         else:
-            # Fallback to PPP rotation
             print("No RNDIS interface found, using PPP fallback")
-        rotation_config = config.get('rotation', {}) or {}
-        teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
-        restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
-        max_attempts  = int(rotation_config.get('max_attempts', 2))
+            rotation_config = config.get('rotation', {}) or {}
+            teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
+            restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
+            max_attempts  = int(rotation_config.get('max_attempts', 2))
 
-        deep_enabled = rotation_config.get('deep_reset_enabled', False)
-        deep_method  = (rotation_config.get('deep_reset_method', 'mmcli') or 'mmcli').lower()
-        if 'deep_reset' in rotation_config:  # backward compat
-            old = (rotation_config.get('deep_reset', '') or '').lower()
-            if old in ('mmcli', 'at'):
-                deep_enabled, deep_method = True, old
-            elif old in ('off', ''):
-                deep_enabled = False
-        deep_wait = int(rotation_config.get('deep_reset_wait', 180))
+            deep_enabled = rotation_config.get('deep_reset_enabled', False)
+            deep_method  = (rotation_config.get('deep_reset_method', 'mmcli') or 'mmcli').lower()
+            if 'deep_reset' in rotation_config:  # backward compat
+                old = (rotation_config.get('deep_reset', '') or '').lower()
+                if old in ('mmcli', 'at'):
+                    deep_enabled, deep_method = True, old
+                elif old in ('off', ''):
+                    deep_enabled = False
+            deep_wait = int(rotation_config.get('deep_reset_wait', 180))
 
-            print(f"PPP rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, "
-              f"max_attempts={max_attempts}, deep_reset={'enabled' if deep_enabled else 'disabled'} ({deep_method}, {deep_wait}s)")
+            print(
+                f"PPP rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, "
+                f"max_attempts={max_attempts}, deep_reset={'enabled' if deep_enabled else 'disabled'} ({deep_method}, {deep_wait}s)"
+            )
 
-        for attempt in range(max_attempts):
+            for attempt in range(max_attempts):
                 print(f"\n--- PPP Rotation Attempt {attempt + 1}/{max_attempts} ---")
-            teardown_ppp(teardown_wait)
+                teardown_ppp(teardown_wait)
 
-            if attempt == 0:
-                print("Attempt 1: Simple PPP restart")
-            else:
-                if deep_enabled:
-                    print(f"Attempt {attempt + 1}: Deep reset ({deep_method}) before PPP")
-                    deep_reset_modem(deep_method, deep_wait)
-                    print("Waiting up to 15s for modem ports to re-enumerate…")
-                    t0 = time.time()
-                    while time.time() - t0 < 15:
-                        if any(n.startswith("ttyUSB") for n in os.listdir("/dev")):
-                            break
-                        time.sleep(1)
+                if attempt == 0:
+                    print("Attempt 1: Simple PPP restart")
                 else:
-                    print(f"Attempt {attempt + 1}: Deep reset disabled; trying PPP restart again")
+                    if deep_enabled:
+                        print(f"Attempt {attempt + 1}: Deep reset ({deep_method}) before PPP")
+                        deep_reset_modem(deep_method, deep_wait)
+                        print("Waiting up to 15s for modem ports to re-enumerate…")
+                        t0 = time.time()
+                        while time.time() - t0 < 15:
+                            if any(n.startswith("ttyUSB") for n in os.listdir("/dev")):
+                                break
+                            time.sleep(1)
+                    else:
+                        print(f"Attempt {attempt + 1}: Deep reset disabled; trying PPP restart again")
 
-            try:
-                start_ppp()
-            except Exception as e:
-                print(f"PPP restart failed on attempt {attempt + 1}: {e}")
-                if attempt == max_attempts - 1:
-                    err = f"PPP restart failed after {max_attempts} attempts"
-                    print(f"IP rotation failed: {err}")
+                try:
+                    start_ppp()
+                except Exception as e:
+                    print(f"PPP restart failed on attempt {attempt + 1}: {e}")
+                    if attempt == max_attempts - 1:
+                        err = f"PPP restart failed after {max_attempts} attempts"
+                        print(f"IP rotation failed: {err}")
                         send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
-                        return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
-                continue
-
-            extra = 0
-            if attempt > 0:
-                extra = max(30, restart_wait)
-            total_wait = restart_wait + extra
-            print(f"Waiting {total_wait} seconds for new IP assignment...")
-            if not wait_for_ppp_up(total_wait):
-                print(f"ppp0 interface not up after attempt {attempt + 1}")
-                if attempt == max_attempts - 1:
-                    err = "ppp0 interface not up after restart"
-                    print(f"IP rotation failed: {err}")
-                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
-                        return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
-                continue
-
-            print("Fixing routing to prefer primary and keep PPP as secondary...")
-            ensure_ppp_default_route()
-            
-            # Re-apply policy routing after PPP restart
-            print("Re-applying policy routing for Squid...")
-            try:
-                # Ensure PPP routing table exists and has default route
-                subprocess.run([IP_PATH, "route", "replace", "default", "dev", "ppp0", "table", "ppp"], check=False)
-                
-                # Re-apply policy rule for marked packets
-                subprocess.run(["ip", "rule", "del", "fwmark", "0x1", "lookup", "ppp"], check=False)
-                subprocess.run(["ip", "rule", "add", "fwmark", "0x1", "lookup", "ppp", "priority", "1000"], check=False)
-                
-                # Re-apply packet marking rule for proxy user
-                subprocess.run([
-                    "iptables", "-t", "mangle", "-D", "OUTPUT", 
-                    "-m", "owner", "--uid-owner", "proxy", 
-                    "-j", "MARK", "--set-mark", "1"
-                ], check=False)
-                subprocess.run([
-                    "iptables", "-t", "mangle", "-A", "OUTPUT", 
-                    "-m", "owner", "--uid-owner", "proxy", 
-                    "-j", "MARK", "--set-mark", "1"
-                ], check=False)
-                print("✅ Policy routing re-applied")
-            except Exception as e:
-                print(f"⚠️ Policy routing re-application failed: {e}")
-
-            # Check if we got a new IP
-            new_ip = get_current_ip()
-            pdp = at('AT+CGPADDR') if new_ip != "Unknown" else ""
-
-            if new_ip != previous_ip and new_ip != "Unknown":
-                # Success! New IP obtained
-                print(f"✅ IP rotation successful on attempt {attempt + 1}: {previous_ip} -> {new_ip}")
-                send_discord_notification(new_ip, previous_ip, is_rotation=True)
-                return jsonify({
-                    'status': 'success',
-                    'pdp': pdp,
-                    'public_ip': new_ip,
-                    'previous_ip': previous_ip,
-                    'attempts': attempt + 1
-                })
-            else:
-                print(f"IP unchanged on attempt {attempt + 1}: {new_ip} (was {previous_ip})")
-                if attempt < max_attempts - 1:
-                    print("Trying next attempt with escalation…")
+                        return jsonify({'status': 'failed', 'error': err, 'public_ip': current_ip, 'previous_ip': previous_ip}), 500
                     continue
-                err = f"IP did not change after {max_attempts} attempts"
-                print(f"IP rotation failed: {err}")
-                send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
-                return jsonify({
-                    'status': 'failed',
-                    'error': err,
-                    'pdp': pdp,
-                    'public_ip': new_ip,
-                    'previous_ip': previous_ip,
-                    'attempts': max_attempts
-                }), 400
+
+                extra = 0
+                if attempt > 0:
+                    extra = max(30, restart_wait)
+                total_wait = restart_wait + extra
+                print(f"Waiting {total_wait} seconds for new IP assignment...")
+                if not wait_for_ppp_up(total_wait):
+                    print(f"ppp0 interface not up after attempt {attempt + 1}")
+                    if attempt == max_attempts - 1:
+                        err = "ppp0 interface not up after restart"
+                        print(f"IP rotation failed: {err}")
+                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                        return jsonify({'status': 'failed', 'error': err, 'public_ip': current_ip, 'previous_ip': previous_ip}), 500
+                    continue
+
+                print("Fixing routing to prefer primary and keep PPP as secondary...")
+                ensure_ppp_default_route()
+
+                # Re-apply policy routing after PPP restart
+                print("Re-applying policy routing for Squid...")
+                try:
+                    # Ensure PPP routing table exists and has default route
+                    subprocess.run([IP_PATH, "route", "replace", "default", "dev", "ppp0", "table", "ppp"], check=False)
+
+                    # Re-apply policy rule for marked packets
+                    subprocess.run(["ip", "rule", "del", "fwmark", "0x1", "lookup", "ppp"], check=False)
+                    subprocess.run(["ip", "rule", "add", "fwmark", "0x1", "lookup", "ppp", "priority", "1000"], check=False)
+
+                    # Re-apply packet marking rule for proxy user
+                    subprocess.run([
+                        "iptables", "-t", "mangle", "-D", "OUTPUT",
+                        "-m", "owner", "--uid-owner", "proxy",
+                        "-j", "MARK", "--set-mark", "1"
+                    ], check=False)
+                    subprocess.run([
+                        "iptables", "-t", "mangle", "-A", "OUTPUT",
+                        "-m", "owner", "--uid-owner", "proxy",
+                        "-j", "MARK", "--set-mark", "1"
+                    ], check=False)
+                    print("✅ Policy routing re-applied")
+                except Exception as e:
+                    print(f"⚠️ Policy routing re-application failed: {e}")
+
+                # Check if we got a new IP
+                new_ip = get_current_ip()
+                pdp = at('AT+CGPADDR') if new_ip != "Unknown" else ""
+
+                if new_ip != previous_ip and new_ip != "Unknown":
+                    # Success! New IP obtained
+                    print(f"✅ IP rotation successful on attempt {attempt + 1}: {previous_ip} -> {new_ip}")
+                    send_discord_notification(new_ip, previous_ip, is_rotation=True)
+                    return jsonify({
+                        'status': 'success',
+                        'pdp': pdp,
+                        'public_ip': new_ip,
+                        'previous_ip': previous_ip,
+                        'attempts': attempt + 1
+                    })
+                else:
+                    print(f"IP unchanged on attempt {attempt + 1}: {new_ip} (was {previous_ip})")
+                    if attempt < max_attempts - 1:
+                        print("Trying next attempt with escalation…")
+                        continue
+                    err = f"IP did not change after {max_attempts} attempts"
+                    print(f"IP rotation failed: {err}")
+                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                    return jsonify({
+                        'status': 'failed',
+                        'error': err,
+                        'pdp': pdp,
+                        'public_ip': new_ip,
+                        'previous_ip': previous_ip,
+                        'attempts': max_attempts
+                    }), 400
 
     except Exception as e:
         err = f"Rotation failed: {str(e)}"
@@ -1301,7 +1322,7 @@ def rotate():
         except Exception:
             current_ip = "Unknown"
         send_discord_notification(current_ip, None, is_rotation=False, is_failure=True, error_message=err)
-        return jsonify({'status':'failed','error':err}), 500
+        return jsonify({'status': 'failed', 'error': err}), 500
     finally:
         in_progress = False
         rotate_lock.release()
@@ -1343,12 +1364,12 @@ def auto_rotation_status():
     """Get auto-rotation status and settings."""
     config = load_config()
     interval = config.get('pm2', {}).get('ip_rotation_interval', 300)
-    
+
     return jsonify({
         'enabled': auto_rotation_enabled,
         'interval_seconds': interval,
         'interval_minutes': interval // 60,
-        'thread_alive': auto_rotation_thread and auto_rotation_thread.is_alive()
+        'thread_alive': bool(auto_rotation_thread and auto_rotation_thread.is_alive())
     })
 
 @app.post('/auto-rotation/enable')
@@ -1359,7 +1380,7 @@ def auto_rotation_enable():
     token = request.headers.get('Authorization', '')
     if expected not in token:
         abort(403)
-    
+
     set_auto_rotation_enabled(True)
     return jsonify({'status': 'enabled', 'message': 'Auto-rotation enabled'})
 
@@ -1371,7 +1392,7 @@ def auto_rotation_disable():
     token = request.headers.get('Authorization', '')
     if expected not in token:
         abort(403)
-    
+
     set_auto_rotation_enabled(False)
     return jsonify({'status': 'disabled', 'message': 'Auto-rotation disabled'})
 
@@ -1383,7 +1404,7 @@ def auto_rotation_restart():
     token = request.headers.get('Authorization', '')
     if expected not in token:
         abort(403)
-    
+
     stop_auto_rotation()
     time.sleep(1)
     start_auto_rotation()
@@ -1424,12 +1445,12 @@ if __name__ == '__main__':
         send_discord_notification(current_ip, is_rotation=True)
     else:
         print("📱 Discord notifications: Not configured")
-    
+
     # Start auto-rotation
     interval = config.get('pm2', {}).get('ip_rotation_interval', 300)
     print(f"🔄 Auto-rotation: Starting with {interval//60} minute intervals")
     start_auto_rotation()
-    
+
     print("="*60)
 
     app.run(host=config['api']['bind'], port=config['api']['port'])
