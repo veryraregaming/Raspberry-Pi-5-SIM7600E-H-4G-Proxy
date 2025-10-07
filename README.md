@@ -179,7 +179,22 @@ sudo bash scripts/randomise_imei.sh
 - Uses `AT+EGMR=1,7,"IMEI"` command
 - Reboots modem with `AT+CFUN=1,1` to apply
 - Adds ~45 seconds to rotation time
-- Works with SIM7600 series modems
+
+#### **⚠️ Modem Compatibility**
+**SIM7600E-H does NOT support IMEI changes** - the `AT+EGMR` command returns `ERROR`.
+
+This is intentional by the manufacturer for legal compliance. Most modern modems have IMEI modification locked down.
+
+If you enable `randomise_imei: true`:
+- The system will attempt to change IMEI
+- Detect it's not supported
+- Log a warning
+- Continue with normal rotation (without IMEI change)
+
+**Alternative methods:**
+- Some older SIM7600 variants support IMEI changes
+- Hardware modifications may enable it (not recommended)
+- Use different modem models that support this feature
 
 #### **IMEI Tracking in Web Interface**
 The web dashboard displays both IMEIs:

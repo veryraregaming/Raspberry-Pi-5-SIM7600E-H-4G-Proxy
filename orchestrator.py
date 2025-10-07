@@ -496,11 +496,22 @@ def randomise_imei():
             return False
         
         with serial.Serial(modem_dev, 115200, timeout=5) as ser:
-            # Set new IMEI
+            # Try AT+EGMR command (works on some modems)
             ser.write(f'AT+EGMR=1,7,"{random_imei}"\r\n'.encode())
             time.sleep(2)
             response = ser.read_all().decode(errors='ignore')
             print(f"  📡 IMEI set response: {response.strip()}")
+            
+            # Check if command was successful
+            if "ERROR" in response.upper():
+                print(f"  ⚠️ AT+EGMR command not supported by this modem")
+                print(f"  ℹ️  SIM7600E-H may not support IMEI changes via AT commands")
+                print(f"  ℹ️  IMEI randomisation is disabled for this modem model")
+                return False
+            
+            if "OK" not in response.upper():
+                print(f"  ⚠️ IMEI change command returned unexpected response")
+                return False
             
             # Reset modem to apply IMEI change
             print("  📡 Rebooting modem to apply new IMEI...")
