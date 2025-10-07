@@ -34,10 +34,12 @@ def main():
         
         # Run optimizer in auto mode with unbuffered output
         try:
+            # Use unbuffered mode for real-time output
             result = subprocess.run(
-                [sys.executable, '-u', 'optimize_rotation.py', '--auto'],
+                [sys.executable, '-u', str(Path(__file__).parent / 'optimize_rotation.py'), '--auto'],
                 cwd=Path(__file__).parent,
-                check=False
+                check=False,
+                env={**subprocess.os.environ, 'PYTHONUNBUFFERED': '1'}
             )
             
             if result.returncode == 0:

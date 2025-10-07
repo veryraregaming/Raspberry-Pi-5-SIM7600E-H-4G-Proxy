@@ -39,7 +39,40 @@ sudo ./run.sh
 - ✅ Activate SIM7600E-H modem via PPP
 - ✅ Setup simple routing through SIM card
 - ✅ Start Squid proxy on port 3128
+- ✅ **NEW INSTALLS**: Auto-optimize rotation settings (~2 hours)
+- ✅ **UPDATES**: Preserve your existing settings (no optimization unless you opt-in)
 - ✅ Show test commands and proxy details
+
+### **First-Time Setup Auto-Optimization**
+
+On **NEW installations**, the system will automatically:
+1. Start the proxy normally
+2. Run a 2-hour optimization test to find best rotation settings
+3. Test 5 different configurations with varying wait times
+4. Apply the optimal settings automatically
+5. Continue normal operation with optimized timings
+
+This happens **only once** on first setup. Subsequent runs preserve your settings.
+
+### **Existing Users: Manual Optimization**
+
+If you already have the proxy installed and want to optimize your settings:
+
+```bash
+# Edit config:
+nano config.yaml
+
+# Enable optimization:
+rotation:
+  run_optimization: true  # Change to true
+
+# Run setup:
+sudo ./run.sh
+
+# System will auto-optimize and disable the flag when done
+```
+
+Your existing settings (Discord webhook, API tokens, etc.) are **never touched** - only rotation timings are optimized!
 
 **After setup, you'll see:**
 - 📡 HTTP Proxy: `192.168.1.37:3128`
