@@ -45,11 +45,15 @@ IP_PATH="$(command -v ip || echo /usr/sbin/ip)"
 SYSTEMCTL_PATH="$(command -v systemctl || echo /bin/systemctl)"
 MMCLI_PATH="$(command -v mmcli || echo /usr/bin/mmcli)"
 SUDO_PATH="$(command -v sudo || echo /usr/bin/sudo)"
+QMI_NETWORK_PATH="$(command -v qmi-network || echo /usr/bin/qmi-network)"
+QMICLI_PATH="$(command -v qmicli || echo /usr/bin/qmicli)"
 echo "   pkill=${PKILL_PATH}"
 echo "   pppd=${PPPD_PATH}"
 echo "   ip=${IP_PATH}"
 echo "   systemctl=${SYSTEMCTL_PATH}"
 echo "   mmcli=${MMCLI_PATH}"
+echo "   qmi-network=${QMI_NETWORK_PATH}"
+echo "   qmicli=${QMICLI_PATH}"
 echo "   sudo=${SUDO_PATH}"
 
 # -------- write sudoers with NOPASSWD + !requiretty ------------------
@@ -65,6 +69,8 @@ Cmnd_Alias PROXY_CMDS = \\
   ${IP_PATH} link set dev * up, \\
   ${IP_PATH} link set dev * down, \\
   ${DHCLIENT_PATH} *, \\
+  ${QMI_NETWORK_PATH} *, \\
+  ${QMICLI_PATH} *, \\
   ${SYSTEMCTL_PATH} start ModemManager, \\
   ${SYSTEMCTL_PATH} stop ModemManager, \\
   ${MMCLI_PATH} -m 0 --disable, \\
@@ -83,7 +89,7 @@ apt-get update -y
 DEBS=(
   curl wget unzip build-essential iptables
   python3 python3-pip python3-yaml python3-serial python3-requests python3-flask
-  ca-certificates gnupg modemmanager ppp
+  ca-certificates gnupg modemmanager ppp libqmi-utils
   squid
 )
 apt-get install -y "${DEBS[@]}"

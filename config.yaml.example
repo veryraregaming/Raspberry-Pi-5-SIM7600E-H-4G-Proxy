@@ -1,47 +1,76 @@
+# ============================================================
+# 4G Proxy Configuration
+# ============================================================
+
+# API Settings
 api:
-  bind: 127.0.0.1
-  port: 8088
-  token: your-secure-random-token-here
+  bind: 127.0.0.1                          # API bind address (localhost only for security)
+  port: 8088                               # API port
+  token: your-secure-random-token-here     # Auto-generated on first run
 
+# Discord Notifications
 discord:
-  webhook_url: https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN
+  webhook_url: https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN  # Get from Discord Server Settings
 
-lan_bind_ip: 192.168.1.37
+# Network Settings
+lan_bind_ip: 192.168.1.37                  # Auto-detected LAN IP (your Pi's IP on local network)
 
+# Modem Settings
 modem:
-  mode: auto  # "auto" (RNDIS first, PPP fallback), "rndis" (RNDIS only), "ppp" (PPP only)
+  # Connection mode - how the modem connects to cellular network
+  # "auto"  - Try QMI first, then RNDIS, fallback to PPP (recommended, most reliable)
+  # "qmi"   - Force QMI only (Qualcomm MSM Interface, best IP variety for rotation)
+  # "rndis" - Force RNDIS only (IP over USB, stable, simple)
+  # "ppp"   - Force PPP only (dial-up style, more complex, legacy)
+  mode: auto
+  
+  # APN (Access Point Name) - auto-detected from carriers.json
   apn: everywhere
+  
+  # AT command port for modem control
   port: /dev/ttyUSB2
+  
+  # Connection timeout
   timeout: 30
 
+# PM2 Process Management
 pm2:
-  auto_restart: true
-  enabled: true
-  ip_rotation_interval: 300
-  max_restarts: 10
-  restart_delay: 5000
+  enabled: true                            # Enable PM2 auto-restart
+  auto_restart: true                       # Auto-restart on crash
+  ip_rotation_interval: 300                # Auto-rotation interval in seconds (300 = 5 minutes, 0 = disabled)
+  max_restarts: 10                         # Maximum restart attempts before giving up
+  restart_delay: 5000                      # Delay between restarts in milliseconds
 
+# Proxy Authentication (optional)
 proxy:
-  auth_enabled: false
-  password: ''
-  user: ''
+  auth_enabled: false                      # Set to true to require username/password
+  user: ''                                 # Proxy username (only used if auth_enabled: true)
+  password: ''                             # Proxy password (only used if auth_enabled: true)
 
+# IP Rotation Settings
 rotation:
+  # Number of attempts per rotation (2 = simple restart + deep reset)
   max_attempts: 2
-  ppp_restart_wait: 60
+  
+  # Wait time after bringing interface down (seconds)
   ppp_teardown_wait: 30
   
-  # Deep reset settings - only used if simple rotation fails
+  # Wait time for new IP assignment (seconds)
+  ppp_restart_wait: 60
+  
+  # Deep reset settings (RNDIS mode always uses deep reset on attempt 2)
+  # For PPP mode only:
   # Set to true to enable deep reset (more reliable IP changes)
   # Set to false for faster rotation (may not change IP due to CGNAT)
   deep_reset_enabled: false
   
-  # Deep reset method (only used if deep_reset_enabled is true)
+  # Deep reset method (only used for PPP mode if deep_reset_enabled is true)
   # "mmcli" = ModemManager (recommended for most carriers)
   # "at" = AT commands (fallback if mmcli doesn't work)
   deep_reset_method: "mmcli"
   
   # How long to hold modem offline during deep reset (seconds)
+  # Only used for PPP mode - RNDIS uses radio reset timing
   # Longer = better chance of new IP, but longer downtime
   # 60-120s: Fast but may not escape CGNAT
   # 180-300s: Good balance (recommended)

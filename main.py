@@ -71,7 +71,80 @@ def detect_lan_ip():
     finally:
         s.close()
 
-# ---------- modem detection (RNDIS + PPP) ----------
+# ---------- modem detection (QMI + RNDIS + PPP) ----------
+
+def detect_qmi_interface():
+    """Detect QMI interface (wwan*) that provides cellular connectivity."""
+    try:
+        out, _, _ = run_cmd([IP_PATH, "-br", "link", "show"], check=False)
+        for line in out.splitlines():
+            if line.startswith("wwan"):
+                parts = line.split()
+                iface = parts[0]
+                # Check if interface has an IP address
+                ip = detect_ipv4(iface)
+                if ip:
+                    print(f"  ✅ QMI interface found: {iface} with IP {ip}")
+                    return iface, ip
+                else:
+                    print(f"  🔍 QMI interface found: {iface} (no IP yet)")
+                    return iface, None
+    except Exception:
+        pass
+    return None, None
+
+def setup_qmi_interface(iface):
+    """Setup QMI interface using qmicli."""
+    print(f"  🔧 Setting up QMI interface: {iface}")
+    
+    # Bring interface up
+    run_cmd(["sudo", IP_PATH, "link", "set", "dev", iface, "up"], check=False)
+    time.sleep(2)
+    
+    # Start network connection via qmi-network
+    print(f"  📡 Starting QMI connection for {iface}...")
+    out, err, rc = run_cmd(["sudo", "qmi-network", f"/dev/cdc-wdm0", "start"], check=False, timeout=30)
+    
+    if rc == 0:
+        # Configure IP via qmicli
+        print(f"  📡 Configuring IP for {iface}...")
+        time.sleep(2)
+        
+        # Get DHCP settings from modem
+        out, err, rc = run_cmd(["sudo", "qmicli", "-d", "/dev/cdc-wdm0", "--wds-get-current-settings"], 
+                              check=False, timeout=10)
+        
+        # Check if we got an IP
+        ip = detect_ipv4(iface)
+        if ip:
+            print(f"  ✅ QMI interface {iface} configured with IP: {ip}")
+            return ip
+        else:
+            print(f"  ⚠️ QMI connection started but no IP detected on {iface}")
+    else:
+        print(f"  ⚠️ QMI network start failed: {err}")
+    
+    return None
+
+def activate_modem_via_qmi():
+    """Try to activate modem via QMI interface."""
+    print("📡 Activating SIM7600E-H modem via QMI…")
+    
+    # First, try to detect existing QMI interface
+    iface, ip = detect_qmi_interface()
+    
+    if iface and ip:
+        print(f"  ✅ QMI interface {iface} already active with IP {ip}")
+        return iface, ip
+    
+    if iface:
+        # Interface exists but no IP, try to get one
+        ip = setup_qmi_interface(iface)
+        if ip:
+            return iface, ip
+    
+    print("  ❌ QMI interface not available")
+    return None, None
 
 def detect_rndis_interface():
     """Detect RNDIS interface (enx*) that provides cellular connectivity."""
@@ -468,11 +541,20 @@ def activate_modem(apn: str, mode: str = "auto"):
     
     Args:
         apn: APN to use
-        mode: "auto" (RNDIS first, PPP fallback), "rndis" (RNDIS only), "ppp" (PPP only)
+        mode: "auto" (QMI → RNDIS → PPP), "qmi" (QMI only), "rndis" (RNDIS only), "ppp" (PPP only)
     """
     print(f"🚀 Starting modem activation (mode: {mode})...")
     
-    if mode == "ppp":
+    if mode == "qmi":
+        # Force QMI mode
+        print("  📡 Using QMI mode (forced)")
+        iface, ip = activate_modem_via_qmi()
+        if iface and ip:
+            return "qmi", iface, ip
+        print("  ❌ QMI activation failed")
+        return None, None, None
+    
+    elif mode == "ppp":
         # Force PPP mode
         print("  📡 Using PPP mode (forced)")
         if activate_modem_via_ppp(apn):
@@ -490,8 +572,16 @@ def activate_modem(apn: str, mode: str = "auto"):
         return None, None, None
     
     else:
-        # Auto mode: Try RNDIS first (preferred method)
-        print("  📡 Auto mode: trying RNDIS first...")
+        # Auto mode: Try QMI first (best for IP rotation), then RNDIS, fallback to PPP
+        print("  📡 Auto mode: trying QMI → RNDIS → PPP...")
+        
+        # Try QMI first (most reliable for IP rotation)
+        iface, ip = activate_modem_via_qmi()
+        if iface and ip:
+            return "qmi", iface, ip
+        
+        # Try RNDIS second
+        print("  🔄 QMI failed, trying RNDIS...")
         iface, ip = activate_modem_via_rndis()
         if iface and ip:
             return "rndis", iface, ip
@@ -501,7 +591,7 @@ def activate_modem(apn: str, mode: str = "auto"):
         if activate_modem_via_ppp(apn):
             return "ppp", "ppp0", None
         
-        print("  ❌ Both RNDIS and PPP activation failed")
+        print("  ❌ QMI, RNDIS, and PPP activation all failed")
         return None, None, None
 
 def proxy_test(lan_ip: str):

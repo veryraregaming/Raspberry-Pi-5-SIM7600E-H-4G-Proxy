@@ -210,19 +210,23 @@ def get_current_ip():
     if in_progress:
         return "Rotating..."
     
-    # Check if RNDIS interface is up
-    rndis_iface, has_ip = detect_rndis_interface()
+    # Check for QMI interface first
+    qmi_iface, qmi_has_ip = detect_qmi_interface()
     
-    # If RNDIS is down or has no IP, check for PPP
-    if not (rndis_iface and has_ip):
-        try:
-            r = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"], 
-                             capture_output=True, text=True, timeout=3)
-            if r.returncode != 0 or "inet " not in r.stdout:
-                # Neither RNDIS nor PPP is up
+    # If QMI is down, check for RNDIS
+    if not (qmi_iface and qmi_has_ip):
+        rndis_iface, rndis_has_ip = detect_rndis_interface()
+        
+        # If RNDIS is also down, check for PPP
+        if not (rndis_iface and rndis_has_ip):
+            try:
+                r = subprocess.run([IP_PATH, "-4", "addr", "show", "ppp0"], 
+                                 capture_output=True, text=True, timeout=3)
+                if r.returncode != 0 or "inet " not in r.stdout:
+                    # No cellular interface is up
+                    return "Unknown"
+            except Exception:
                 return "Unknown"
-        except Exception:
-            return "Unknown"
     
     # Cellular interface is up, check public IP via proxy
     try:
@@ -336,6 +340,178 @@ def send_discord_notification(current_ip, previous_ip=None, is_rotation=False, i
     except Exception as e:
         print(f"Failed to send Discord notification: {e}")
         return False
+
+# ========= QMI helpers =========
+
+def detect_qmi_interface():
+    """Detect QMI interface (wwan*) that provides cellular connectivity."""
+    try:
+        ip_cmd = IP_PATH if IP_PATH and os.path.exists(IP_PATH) else "/usr/sbin/ip"
+        
+        result = subprocess.run([ip_cmd, "-br", "link", "show"], 
+                               capture_output=True, text=True, check=False, timeout=5)
+        if result.returncode != 0:
+            print(f"detect_qmi_interface: ip link failed: {result.stderr}")
+            return None, False
+        
+        print(f"detect_qmi_interface: Checking interfaces...")
+        print(f"detect_qmi_interface: Output: {result.stdout[:200]}")
+            
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("wwan"):
+                parts = line.split()
+                if not parts:
+                    continue
+                iface = parts[0]
+                print(f"detect_qmi_interface: Found interface {iface}")
+                
+                # Check if interface has an IP address
+                ip_result = subprocess.run([ip_cmd, "-4", "addr", "show", iface],
+                                          capture_output=True, text=True, check=False, timeout=5)
+                if ip_result.returncode != 0:
+                    print(f"detect_qmi_interface: ip addr failed for {iface}: {ip_result.stderr}")
+                    return iface, False
+                    
+                if "inet " in ip_result.stdout:
+                    print(f"detect_qmi_interface: Interface {iface} has IP")
+                    return iface, True
+                else:
+                    print(f"detect_qmi_interface: Interface {iface} has no IP")
+                    return iface, False
+                    
+        print("detect_qmi_interface: No QMI interfaces found in output")
+    except Exception as e:
+        print(f"detect_qmi_interface: Exception: {e}")
+        import traceback
+        traceback.print_exc()
+    return None, False
+
+def deep_reset_qmi_modem():
+    """Deep reset modem using AT commands to force new IP."""
+    try:
+        print("🔄 Performing deep QMI modem reset (radio + PDP context)...")
+        
+        # Find the modem control device
+        modem_dev = "/dev/ttyUSB2"  # Default for SIM7600E-H
+        if not os.path.exists(modem_dev):
+            print(f"⚠️ Modem device {modem_dev} not found, trying /dev/ttyUSB0")
+            modem_dev = "/dev/ttyUSB0"
+        
+        if not os.path.exists(modem_dev):
+            print("⚠️ No modem control device found")
+            return False
+        
+        with serial.Serial(modem_dev, 115200, timeout=5) as ser:
+            # 1. Deactivate PDP context
+            print("📡 Deactivating PDP context...")
+            ser.write(b"AT+CGACT=0,1\r\n")
+            time.sleep(2)
+            ser.read(1000)
+            
+            # 2. Detach from network
+            print("📡 Detaching from network...")
+            ser.write(b"AT+CGATT=0\r\n")
+            time.sleep(2)
+            ser.read(1000)
+            
+            # 3. Radio off
+            print("📴 Radio off...")
+            ser.write(b"AT+CFUN=0\r\n")
+            time.sleep(5)
+            ser.read(1000)
+            
+            # 4. Radio on
+            print("📡 Radio on...")
+            ser.write(b"AT+CFUN=1\r\n")
+            time.sleep(5)
+            ser.read(1000)
+            
+            # 5. Reattach to network
+            print("📡 Reattaching to network...")
+            ser.write(b"AT+CGATT=1\r\n")
+            time.sleep(2)
+            ser.read(1000)
+            
+            # 6. Reactivate PDP context
+            print("📡 Reactivating PDP context...")
+            ser.write(b"AT+CGACT=1,1\r\n")
+            time.sleep(2)
+            ser.read(1000)
+            
+        print("✅ Deep QMI modem reset complete")
+        return True
+        
+    except Exception as e:
+        print(f"⚠️ Deep reset failed: {e}")
+        return False
+
+def teardown_qmi(wait_s: int, deep_reset: bool = False):
+    """Tear down QMI interface."""
+    iface, _ = detect_qmi_interface()
+    if iface:
+        print(f"Bringing down QMI interface: {iface}")
+        
+        # Stop QMI network connection
+        subprocess.run([SUDO_PATH, "-n", "qmi-network", "/dev/cdc-wdm0", "stop"],
+                      capture_output=True, text=True, check=False)
+        time.sleep(2)
+        
+        # Bring interface down
+        subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "down"],
+                      capture_output=True, text=True, check=False)
+        
+        # Perform deep reset if requested
+        if deep_reset:
+            deep_reset_qmi_modem()
+            wait_s = max(wait_s, 30)  # Add extra wait after deep reset
+        
+        print(f"Waiting {wait_s} seconds for QMI teardown...")
+        time.sleep(wait_s)
+    else:
+        print("No QMI interface found, skipping teardown")
+
+def start_qmi():
+    """Start QMI interface by bringing it up and starting connection."""
+    iface, has_ip = detect_qmi_interface()
+    if not iface:
+        raise RuntimeError("No QMI interface found")
+    
+    print(f"Starting QMI connection for: {iface}")
+    
+    # Bring interface up
+    res = subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "up"],
+                        capture_output=True, text=True, check=False)
+    if res.returncode != 0:
+        raise RuntimeError(f"Failed to bring up {iface}: {res.stderr.strip()}")
+    
+    time.sleep(2)
+    
+    # Start QMI network connection
+    print(f"Starting QMI network connection...")
+    res = subprocess.run([SUDO_PATH, "-n", "qmi-network", "/dev/cdc-wdm0", "start"],
+                        capture_output=True, text=True, timeout=30, check=False)
+    
+    if res.returncode != 0:
+        raise RuntimeError(f"QMI network start failed: {res.stderr.strip()}")
+    
+    time.sleep(5)
+    
+    # Get DHCP settings
+    res = subprocess.run([SUDO_PATH, "-n", "qmicli", "-d", "/dev/cdc-wdm0", "--wds-get-current-settings"],
+                        capture_output=True, text=True, timeout=10, check=False)
+    
+    return iface
+
+def wait_for_qmi_up(timeout_s: int) -> bool:
+    """Wait for QMI interface to get an IP address."""
+    deadline = time.time() + max(5, int(timeout_s))
+    while time.time() < deadline:
+        iface, has_ip = detect_qmi_interface()
+        if iface and has_ip:
+            return True
+        time.sleep(2)
+    return False
 
 # ========= RNDIS helpers =========
 
@@ -551,19 +727,87 @@ def auto_rotation_worker():
                         # Get configured modem mode
                         modem_mode = config.get('modem', {}).get('mode', 'auto')
 
-                        # Check if we have RNDIS interface available
+                        # Check available interfaces
+                        qmi_iface, qmi_has_ip = detect_qmi_interface()
                         rndis_iface, rndis_has_ip = detect_rndis_interface()
                         
                         # Determine which mode to use
+                        use_qmi = False
                         use_rndis = False
-                        if modem_mode == "rndis":
+                        if modem_mode == "qmi":
+                            use_qmi = True
+                        elif modem_mode == "rndis":
                             use_rndis = True
                         elif modem_mode == "ppp":
+                            use_qmi = False
                             use_rndis = False
                         elif modem_mode == "auto":
-                            use_rndis = (rndis_iface is not None)
+                            # Auto priority: QMI > RNDIS > PPP
+                            if qmi_iface:
+                                use_qmi = True
+                            elif rndis_iface:
+                                use_rndis = True
                         
-                        if use_rndis and rndis_iface:
+                        if use_qmi and qmi_iface:
+                            print(f"Auto-rotation: Using QMI interface: {qmi_iface}")
+                            rotation_config = config.get('rotation', {}) or {}
+                            teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
+                            restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
+                            max_attempts  = int(rotation_config.get('max_attempts', 2))
+
+                            for attempt in range(max_attempts):
+                                print(f"Auto-rotation: QMI Rotation Attempt {attempt + 1}/{max_attempts}")
+                                
+                                # Use deep reset on second attempt for better IP variety
+                                use_deep_reset = (attempt > 0)
+                                if use_deep_reset:
+                                    print(f"Auto-rotation: Using deep reset on attempt {attempt + 1}")
+                                
+                                teardown_qmi(teardown_wait, deep_reset=use_deep_reset)
+
+                                try:
+                                    start_qmi()
+                                except Exception as e:
+                                    print(f"Auto-rotation: QMI restart failed on attempt {attempt + 1}: {e}")
+                                    if attempt == max_attempts - 1:
+                                        err = f"QMI restart failed after {max_attempts} attempts"
+                                        print(f"Auto-rotation failed: {err}")
+                                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                                        continue
+                                    continue
+
+                                if not wait_for_qmi_up(restart_wait):
+                                    print(f"Auto-rotation: QMI interface did not come up within {restart_wait} seconds")
+                                    if attempt == max_attempts - 1:
+                                        err = f"QMI interface failed to get IP after {max_attempts} attempts"
+                                        print(f"Auto-rotation failed: {err}")
+                                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                                        continue
+                                    continue
+
+                                # Check if IP changed
+                                time.sleep(5)  # Give it a moment to stabilize
+                                new_ip = get_current_ip()
+                                
+                                # Update IP history regardless of success/failure
+                                if new_ip != "Unknown":
+                                    update_ip_history(new_ip)
+                                
+                                if new_ip != previous_ip and new_ip != "Unknown":
+                                    print(f"✅ Auto-rotation successful: {previous_ip} -> {new_ip}")
+                                    send_discord_notification(new_ip, previous_ip, is_rotation=True)
+                                    break
+                                else:
+                                    print(f"Auto-rotation: IP unchanged on attempt {attempt + 1}: {new_ip} (was {previous_ip})")
+                                    if attempt < max_attempts - 1:
+                                        continue
+                                    err = f"IP did not change after {max_attempts} attempts"
+                                    print(f"Auto-rotation failed: {err}")
+                                    # Force add to history even though IP is same (to show failed rotation attempt)
+                                    update_ip_history(new_ip, force_add=True, is_failure=True)
+                                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                        
+                        elif use_rndis and rndis_iface:
                             print(f"Auto-rotation: Using RNDIS interface: {rndis_iface}")
                             rotation_config = config.get('rotation', {}) or {}
                             teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
@@ -702,19 +946,105 @@ def rotate():
         modem_mode = config.get('modem', {}).get('mode', 'auto')
         print(f"Modem mode: {modem_mode}")
 
-        # Check if we have RNDIS interface available
+        # Check available interfaces
+        qmi_iface, qmi_has_ip = detect_qmi_interface()
         rndis_iface, rndis_has_ip = detect_rndis_interface()
         
         # Determine which mode to use based on config and availability
+        use_qmi = False
         use_rndis = False
-        if modem_mode == "rndis":
+        
+        if modem_mode == "qmi":
+            use_qmi = True
+        elif modem_mode == "rndis":
             use_rndis = True
         elif modem_mode == "ppp":
+            use_qmi = False
             use_rndis = False
         elif modem_mode == "auto":
-            use_rndis = (rndis_iface is not None)
+            # Auto priority: QMI > RNDIS > PPP
+            if qmi_iface:
+                use_qmi = True
+            elif rndis_iface:
+                use_rndis = True
         
-        if use_rndis and rndis_iface:
+        if use_qmi and qmi_iface:
+            print(f"Using QMI interface: {qmi_iface}")
+            rotation_config = config.get('rotation', {}) or {}
+            teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
+            restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
+            max_attempts  = int(rotation_config.get('max_attempts', 2))
+
+            print(f"QMI rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, max_attempts={max_attempts}")
+
+            for attempt in range(max_attempts):
+                print(f"\n--- QMI Rotation Attempt {attempt + 1}/{max_attempts} ---")
+                
+                # Use deep reset on second attempt for better IP variety
+                use_deep_reset = (attempt > 0)
+                if use_deep_reset:
+                    print(f"Using deep reset on attempt {attempt + 1} for better IP variety")
+                
+                teardown_qmi(teardown_wait, deep_reset=use_deep_reset)
+
+                try:
+                    start_qmi()
+                except Exception as e:
+                    print(f"QMI restart failed on attempt {attempt + 1}: {e}")
+                    if attempt == max_attempts - 1:
+                        err = f"QMI restart failed after {max_attempts} attempts"
+                        print(f"IP rotation failed: {err}")
+                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                        return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                    continue
+
+                total_wait = restart_wait
+                print(f"Waiting {total_wait} seconds for new IP assignment...")
+                if not wait_for_qmi_up(total_wait):
+                    print(f"QMI interface did not come up within {total_wait} seconds")
+                    if attempt == max_attempts - 1:
+                        err = f"QMI interface failed to get IP after {max_attempts} attempts"
+                        print(f"IP rotation failed: {err}")
+                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                        return jsonify({'status':'failed','error':err,'public_ip':current_ip,'previous_ip':previous_ip}), 500
+                    continue
+
+                # Check if IP changed
+                time.sleep(5)  # Give it a moment to stabilize
+                new_ip = get_current_ip()
+                
+                # Update IP history regardless of success/failure
+                if new_ip != "Unknown":
+                    update_ip_history(new_ip)
+                
+                if new_ip != previous_ip and new_ip != "Unknown":
+                    print(f"✅ IP rotation successful on attempt {attempt + 1}: {previous_ip} -> {new_ip}")
+                    send_discord_notification(new_ip, previous_ip, is_rotation=True)
+                    return jsonify({
+                        'status': 'success',
+                        'public_ip': new_ip,
+                        'previous_ip': previous_ip,
+                        'attempts': attempt + 1
+                    })
+                else:
+                    print(f"IP unchanged on attempt {attempt + 1}: {new_ip} (was {previous_ip})")
+                    if attempt < max_attempts - 1:
+                        print("Trying next attempt...")
+                        continue
+                    err = f"IP did not change after {max_attempts} attempts"
+                    print(f"IP rotation failed: {err}")
+                    # Force add to history even though IP is same (to show failed rotation attempt)
+                    update_ip_history(new_ip, force_add=True, is_failure=True)
+                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                    return jsonify({
+                        'status': 'failed',
+                        'error': err,
+                        'public_ip': new_ip,
+                        'previous_ip': previous_ip,
+                        'attempts': max_attempts
+                    }), 400
+        
+        elif use_rndis and rndis_iface:
             print(f"Using RNDIS interface: {rndis_iface}")
             rotation_config = config.get('rotation', {}) or {}
             teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
