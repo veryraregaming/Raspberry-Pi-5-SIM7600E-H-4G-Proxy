@@ -250,6 +250,32 @@ def test_configuration(teardown_wait, restart_wait, test_count, description):
     
     return results
 
+def disable_auto_rotation():
+    """Disable auto-rotation during testing."""
+    token = get_api_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        response = requests.post(f"{API_BASE}/auto-rotation/disable", headers=headers, timeout=10)
+        if response.status_code == 200:
+            print("  ✅ Auto-rotation disabled for testing")
+            return True
+    except Exception as e:
+        print(f"  ⚠️ Could not disable auto-rotation: {e}")
+    return False
+
+def enable_auto_rotation():
+    """Re-enable auto-rotation after testing."""
+    token = get_api_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        response = requests.post(f"{API_BASE}/auto-rotation/enable", headers=headers, timeout=10)
+        if response.status_code == 200:
+            print("  ✅ Auto-rotation re-enabled")
+            return True
+    except Exception as e:
+        print(f"  ⚠️ Could not re-enable auto-rotation: {e}")
+    return False
+
 def run_optimization():
     """Run full optimization test."""
     print("🚀 IP Rotation Optimizer")
@@ -268,6 +294,12 @@ def run_optimization():
     print("="*70)
     
     input("\nPress Enter to start optimization... (or Ctrl+C to cancel)")
+    
+    # Disable auto-rotation during testing
+    print("\n⚙️ Preparing test environment...")
+    disable_auto_rotation()
+    print("⏱️ Waiting 10 seconds for system to stabilize...")
+    time.sleep(10)
     
     # Run control test first
     control_results = run_control_test()
@@ -389,14 +421,22 @@ def run_optimization():
         print("✅ Settings applied! Restart orchestrator with: pm2 restart 4g-proxy-orchestrator")
     else:
         print("Skipped. You can manually apply settings from the report above.")
+    
+    # Re-enable auto-rotation
+    print("\n⚙️ Restoring auto-rotation...")
+    enable_auto_rotation()
 
 if __name__ == "__main__":
     try:
         run_optimization()
     except KeyboardInterrupt:
         print("\n\n⚠️ Optimization cancelled by user")
+        print("⚙️ Re-enabling auto-rotation...")
+        enable_auto_rotation()
     except Exception as e:
         print(f"\n\n❌ Error: {e}")
+        print("⚙️ Re-enabling auto-rotation...")
+        enable_auto_rotation()
         import traceback
         traceback.print_exc()
 
