@@ -293,7 +293,7 @@ def restore_auto_rotation(original_state):
         print(f"  ⚙️ Restoring auto-rotation to original state...")
         set_auto_rotation(original_state)
 
-def run_optimization():
+def run_optimization(auto_start=False):
     """Run full optimization test."""
     print("🚀 IP Rotation Optimizer")
     print("="*70)
@@ -310,7 +310,11 @@ def run_optimization():
     print(f"\nEstimated total time: {estimated_time/60:.1f} minutes ({estimated_time/3600:.1f} hours)")
     print("="*70)
     
-    input("\nPress Enter to start optimization... (or Ctrl+C to cancel)")
+    if not auto_start:
+        input("\nPress Enter to start optimization... (or Ctrl+C to cancel)")
+    else:
+        print("\n🤖 Auto-start mode enabled - starting immediately...")
+        time.sleep(2)
     
     # Save current auto-rotation state
     print("\n⚙️ Preparing test environment...")
@@ -459,6 +463,18 @@ def run_optimization():
 
 def main():
     """Main entry point with proper cleanup on interruption."""
+    import sys
+    
+    # Check if running non-interactively or --auto flag
+    auto_start = False
+    
+    if '--auto' in sys.argv:
+        auto_start = True
+    elif not sys.stdin.isatty():
+        # Running in background/pipe
+        auto_start = True
+        print("🤖 Non-interactive mode detected - auto-starting...")
+    
     original_state = None
     
     try:
@@ -466,7 +482,7 @@ def main():
         original_state = get_auto_rotation_status()
         
         # Run the optimization
-        run_optimization()
+        run_optimization(auto_start=auto_start)
         
     except KeyboardInterrupt:
         print("\n\n⚠️ Optimization cancelled by user")
