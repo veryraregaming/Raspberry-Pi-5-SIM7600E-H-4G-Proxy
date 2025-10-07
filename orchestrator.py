@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import sys
 import time
 import requests
 import serial
@@ -1587,8 +1588,47 @@ def auto_rotation_restart():
     start_auto_rotation()
     return jsonify({'status': 'restarted', 'message': 'Auto-rotation thread restarted'})
 
-if __name__ == '__main__':
+def check_and_run_optimization():
+    """Check if optimization should run on startup."""
     config = load_config()
+    should_optimize = config.get('rotation', {}).get('run_optimization', False)
+    
+    if should_optimize:
+        print("\n" + "="*60)
+        print("🎯 OPTIMIZATION MODE ENABLED")
+        print("="*60)
+        print("Starting automatic rotation optimization...")
+        print("This will take ~2 hours to find optimal settings.")
+        print("The orchestrator will start normally after optimization.")
+        print("="*60 + "\n")
+        
+        try:
+            # Run the optimizer
+            import subprocess
+            result = subprocess.run(
+                [sys.executable, '-u', str(Path(__file__).parent / 'optimize_rotation.py'), '--auto'],
+                cwd=Path(__file__).parent,
+                env={**os.environ, 'PYTHONUNBUFFERED': '1'}
+            )
+            
+            if result.returncode == 0:
+                print("\n✅ Optimization complete! Reloading config with optimal settings...")
+                # Reload config to get updated settings
+                return load_config()
+            else:
+                print("\n⚠️ Optimization failed, using existing settings")
+                return config
+        except Exception as e:
+            print(f"\n⚠️ Optimization error: {e}")
+            print("Continuing with existing settings...")
+            return config
+    
+    return config
+
+if __name__ == '__main__':
+    # Check if optimization should run first
+    config = check_and_run_optimization()
+    
     lan_ip = config['lan_bind_ip']
     auth_enabled = config['proxy']['auth_enabled']
     proxy_user = config['proxy']['user']
