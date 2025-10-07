@@ -417,6 +417,7 @@ def write_config_yaml():
             "ppp_teardown_wait": 30,
             "ppp_restart_wait": 60,
             "max_attempts": 2,
+            "randomise_imei": False,
             "deep_reset_enabled": False,
             "deep_reset_method": "mmcli",
             "deep_reset_wait": 180
