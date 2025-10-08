@@ -361,6 +361,36 @@ connect "{CHAT_PATH} -v -f {chat_file}"
     run_cmd(["sudo", "cp", str(BASE / "ee-peer.tmp"), peer_file], check=False)
     run_cmd(["sudo", "chmod", "644", peer_file], check=False)
 
+def setup_rndis_policy_routing(rndis_iface):
+    """Setup policy routing for RNDIS interface (similar to PPP setup)."""
+    try:
+        print(f"  🔧 Setting up policy routing for RNDIS interface: {rndis_iface}")
+        
+        # Ensure dedicated routing table for RNDIS
+        table_id = 101
+        table_name = "rndis"
+        rt_tables = "/etc/iproute2/rt_tables"
+        
+        # Add routing table if not exists
+        run_cmd(["sudo", "grep", "-q", f"^{table_id} {table_name}$", rt_tables], check=False)
+        if run_cmd(["sudo", "grep", "-q", f"^{table_id} {table_name}$", rt_tables], check=False)[2] != 0:
+            run_cmd(["sudo", "bash", "-c", f"echo '{table_id} {table_name}' >> {rt_tables}"], check=False)
+        
+        # Default route in RNDIS table via RNDIS interface
+        run_cmd(["sudo", IP_PATH, "route", "replace", "default", "dev", rndis_iface, "table", table_name], check=False)
+        
+        # Policy rule: packets marked 0x1 use table 'rndis'
+        run_cmd(["sudo", IP_PATH, "rule", "del", "fwmark", "0x1", "lookup", table_name], check=False)
+        run_cmd(["sudo", IP_PATH, "rule", "add", "fwmark", "0x1", "lookup", table_name, "priority", "1001"], check=False)
+        
+        # Mark all OUTPUT traffic from Squid user with 0x1
+        run_cmd(["sudo", "iptables", "-t", "mangle", "-D", "OUTPUT", "-m", "owner", "--uid-owner", "proxy", "-j", "MARK", "--set-mark", "1"], check=False)
+        run_cmd(["sudo", "iptables", "-t", "mangle", "-A", "OUTPUT", "-m", "owner", "--uid-owner", "proxy", "-j", "MARK", "--set-mark", "1"], check=False)
+        
+        print(f"  ✅ Policy routing configured: Squid traffic via {rndis_iface}")
+    except Exception as e:
+        print(f"  ⚠️ Policy routing setup failed: {e}")
+
 def keep_primary_and_add_ppp_secondary():
     try:
         out, _, _ = run_cmd([IP_PATH, "route", "show", "default"], check=False)
@@ -740,7 +770,8 @@ def main():
     
     if mode == "rndis":
         print(f"  ✅ Cellular connection via RNDIS: {iface} ({cellular_ip})")
-        write_squid_conf(cfg, cellular_ip)
+        write_squid_conf(cfg)  # Don't pass cellular_ip for RNDIS - use policy routing instead
+        setup_rndis_policy_routing(iface)
         print("  🔄 Squid will be restarted by run.sh to apply new configuration")
     elif mode == "ppp":
         print(f"  ✅ Cellular connection via PPP: {iface}")
