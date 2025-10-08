@@ -185,8 +185,10 @@ else
     if [[ -n "${CELL_GW}" ]]; then
       $IP route replace default via "${CELL_GW}" dev "${CELL_IFACE}" table cellular
     else
-      $IP route replace default dev "${CELL_IFACE}" table cellular
+      # Fallback: use the standard RNDIS gateway
+      $IP route replace default via 192.168.225.1 dev "${CELL_IFACE}" table cellular
     fi
+    echo "   -> Cellular table: default via ${CELL_GW:-192.168.225.1} dev ${CELL_IFACE}"
   fi
 
   # Single policy rule for marked traffic
