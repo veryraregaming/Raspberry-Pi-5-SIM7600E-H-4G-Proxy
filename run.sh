@@ -179,7 +179,15 @@ $IPTABLES -P INPUT ACCEPT
 # $IPTABLES -F INPUT
 # $IPTABLES -P INPUT DROP && $IPTABLES -A INPUT -i lo -j ACCEPT && $IPTABLES -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-LAN_CIDR="192.168.0.0/16"
+# Auto-detect LAN CIDR from the Pi's own IP
+LAN_CIDR="192.168.0.0/16"  # Default fallback
+if [[ -n "${LAN_IP:-}" ]]; then
+  # Extract network from Pi's IP (e.g., 192.168.1.37 -> 192.168.1.0/24)
+  LAN_NET="$(echo "$LAN_IP" | cut -d. -f1-3).0/24"
+  LAN_CIDR="$LAN_NET"
+  echo "   -> Detected LAN: ${LAN_CIDR}"
+fi
+
 $IPTABLES -C INPUT -p tcp -s "$LAN_CIDR" --dport 22   -j ACCEPT 2>/dev/null || $IPTABLES -A INPUT -p tcp -s "$LAN_CIDR" --dport 22   -j ACCEPT
 $IPTABLES -C INPUT -p tcp -s "$LAN_CIDR" --dport 3128 -j ACCEPT 2>/dev/null || $IPTABLES -A INPUT -p tcp -s "$LAN_CIDR" --dport 3128 -j ACCEPT
 $IPTABLES -C INPUT -p tcp -s "$LAN_CIDR" --dport 5000 -j ACCEPT 2>/dev/null || $IPTABLES -A INPUT -p tcp -s "$LAN_CIDR" --dport 5000 -j ACCEPT
