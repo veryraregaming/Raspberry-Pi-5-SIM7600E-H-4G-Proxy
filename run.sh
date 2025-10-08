@@ -216,12 +216,14 @@ fi
 echo "==> Firewall: allow LAN to reach SSH(22) + Squid(3128) + (opt) Web(5000)…"
 # Only manage INPUT; proxy does not need kernel forwarding
 $IPTABLES -P FORWARD DROP
-# We’ll keep INPUT ACCEPT to avoid surprises, then explicitly add allow rules (harmless with ACCEPT)
-$IPTABLES -P INPUT ACCEPT
 
-# (Optional) If you want a stricter policy, uncomment the next 2 lines:
-# $IPTABLES -F INPUT
-# $IPTABLES -P INPUT DROP && $IPTABLES -A INPUT -i lo -j ACCEPT && $IPTABLES -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+# Clear existing INPUT rules to prevent duplicates
+$IPTABLES -F INPUT
+
+# Keep INPUT ACCEPT policy, then add specific allow rules
+$IPTABLES -P INPUT ACCEPT
+$IPTABLES -A INPUT -i lo -j ACCEPT
+$IPTABLES -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
 # Auto-detect LAN CIDR from the Pi's own IP
 LAN_CIDR="192.168.0.0/16"  # Default fallback
