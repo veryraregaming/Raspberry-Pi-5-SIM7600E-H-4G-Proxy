@@ -2,18 +2,18 @@
 set -euo pipefail
 
 # =====================================================================
-# Raspberry-Pi-5-SIM7600E-H-4G-Proxy — One-shot, fully automated setup
-# - Cleans old PM2 state
-# - Creates sudoers (passwordless/!requiretty) for required commands
-# - Installs deps, writes config files, activates PPP/routing via main.py
-# - Starts orchestrator under PM2 as REAL_USER (not root)
-# - Verifies API + proxy; optionally runs a rotation once
+# Raspberry Pi 5 + SIM7600E-H 4G Proxy — bootstrap + clean start
+# - Cleans lingering processes, ip rules and iptables marks
+# - Installs dependencies (idempotent)
+# - Ensures sudoers for the login user
+# - Runs main.py to write config and bring up cellular
+# - Detects cellular iface (PPP/RNDIS/QMI) and pins Squid egress
+# - Starts orchestrator + web via PM2 under the real user
 # =====================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# -------- resolve the real login user that will own PM2 ---------------
 REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
 if [[ -z "${REAL_HOME}" || ! -d "${REAL_HOME}" ]]; then
@@ -21,46 +21,65 @@ if [[ -z "${REAL_HOME}" || ! -d "${REAL_HOME}" ]]; then
   exit 1
 fi
 
-echo "==> Running as root for setup; PM2 will run as user: ${REAL_USER} (${REAL_HOME})"
+echo "==> Preparing clean start (user: ${REAL_USER}, home: ${REAL_HOME})"
 
-# -------- kill any lingering PM2/app processes (idempotent) ----------
-echo "==> Cleaning up old PM2 processes..."
-pm2 delete 4g-proxy-orchestrator 2>/dev/null || true
-pm2 delete 4g-proxy-web 2>/dev/null || true
-pm2 kill 2>/dev/null || true
-echo "✅ Old PM2 processes cleaned up"
-
-# -------- state directory (owned by REAL_USER) ------------------------
-echo "==> Preparing state directory..."
-mkdir -p state
-chown -R "${REAL_USER}:${REAL_USER}" state
-chmod 755 state
-echo "✅ state/ ready"
-
-# -------- discover exact command paths (for sudoers correctness) -----
-echo "==> Resolving command paths for sudoers..."
+# -------- resolve command paths (used in sudoers & here) -------------
 PKILL_PATH="$(command -v pkill || echo /usr/bin/pkill)"
 PPPD_PATH="$(command -v pppd || echo /usr/sbin/pppd)"
 IP_PATH="$(command -v ip || echo /usr/sbin/ip)"
 SYSTEMCTL_PATH="$(command -v systemctl || echo /bin/systemctl)"
 MMCLI_PATH="$(command -v mmcli || echo /usr/bin/mmcli)"
-SUDO_PATH="$(command -v sudo || echo /usr/bin/sudo)"
 QMI_NETWORK_PATH="$(command -v qmi-network || echo /usr/bin/qmi-network)"
 QMICLI_PATH="$(command -v qmicli || echo /usr/bin/qmicli)"
 UDHCPC_PATH="$(command -v udhcpc || echo /sbin/udhcpc)"
-echo "   pkill=${PKILL_PATH}"
-echo "   pppd=${PPPD_PATH}"
-echo "   ip=${IP_PATH}"
-echo "   systemctl=${SYSTEMCTL_PATH}"
-echo "   mmcli=${MMCLI_PATH}"
-echo "   qmi-network=${QMI_NETWORK_PATH}"
-echo "   qmicli=${QMICLI_PATH}"
-echo "   udhcpc=${UDHCPC_PATH}"
-echo "   sudo=${SUDO_PATH}"
-
-# -------- write sudoers with NOPASSWD + !requiretty ------------------
-echo "==> Writing /etc/sudoers.d/4g-proxy..."
 DHCLIENT_PATH="$(command -v dhclient || echo /sbin/dhclient)"
+NFT_PATH="$(command -v nft || true)"
+IPTABLES_PATH="$(command -v iptables || echo /usr/sbin/iptables)"
+PM2_PATH="$(command -v pm2 || true)"
+
+# -------- CLEANUP: processes ----------------------------------------
+echo "==> Killing lingering processes (safe, idempotent)…"
+${PKILL_PATH} -f "python.*orchestrator" 2>/dev/null || true
+${PKILL_PATH} -f "python.*web_interface" 2>/dev/null || true
+${PKILL_PATH} -f "flask" 2>/dev/null || true
+${PKILL_PATH} -f "uvicorn" 2>/dev/null || true
+${PKILL_PATH} -f "gunicorn" 2>/dev/null || true
+${PKILL_PATH} pppd 2>/dev/null || true
+
+# -------- CLEANUP: PM2 apps & daemon --------------------------------
+echo "==> Cleaning PM2 apps/daemon…"
+if [[ -n "${PM2_PATH}" ]]; then
+  pm2 delete 4g-proxy-orchestrator 2>/dev/null || true
+  pm2 delete 4g-proxy-web 2>/dev/null || true
+  pm2 kill 2>/dev/null || true
+fi
+
+# -------- CLEANUP: policy routing / iptables marks -------------------
+echo "==> Cleaning ip rules/marks (idempotent)…"
+# rules (both names/ids we may have used)
+${IP_PATH} rule del fwmark 0x1 table cellular 2>/dev/null || true
+${IP_PATH} rule del fwmark 0x1 table 100 2>/dev/null || true
+${IP_PATH} route flush table cellular 2>/dev/null || true
+${IP_PATH} route flush table 100 2>/dev/null || true
+
+# mangle OUTPUT marks for proxy/root (remove if present)
+${IPTABLES_PATH} -t mangle -D OUTPUT -m owner --uid-owner proxy -j MARK --set-mark 1 2>/dev/null || true
+${IPTABLES_PATH} -t mangle -D OUTPUT -m owner --uid-owner root  -j MARK --set-mark 1 2>/dev/null || true
+
+# try removing any old MASQUERADE on common ifaces (non-fatal)
+for IFX in ppp0 usb0 eth1 eth2 eth3 wwan0; do
+  ${IPTABLES_PATH} -t nat -D POSTROUTING -o "$IFX" -j MASQUERADE 2>/dev/null || true
+done
+
+echo "✅ Clean start complete"
+
+# -------- ensure state dir ------------------------------------------
+mkdir -p state
+chown -R "${REAL_USER}:${REAL_USER}" state
+chmod 755 state
+
+# -------- sudoers for the real user ---------------------------------
+echo "==> Writing /etc/sudoers.d/4g-proxy…"
 cat >/etc/sudoers.d/4g-proxy <<EOF
 # 4G Proxy sudoers for ${REAL_USER}
 Cmnd_Alias PROXY_CMDS = \\
@@ -86,32 +105,29 @@ chmod 0440 /etc/sudoers.d/4g-proxy
 visudo -c >/dev/null
 echo "✅ sudoers validated"
 
-# -------- base packages (idempotent) ---------------------------------
-echo "==> Installing base packages…"
+# -------- deps (idempotent) -----------------------------------------
+echo "==> Installing dependencies…"
 apt-get update -y
 DEBS=(
-  curl wget unzip build-essential iptables
+  curl wget unzip build-essential iptables nftables
   python3 python3-pip python3-yaml python3-serial python3-requests python3-flask
-  ca-certificates gnupg modemmanager ppp libqmi-utils udhcpc
+  ca-certificates gnupg modemmanager ppp libqmi-utils udhcpc isc-dhcp-client
   squid
 )
 apt-get install -y "${DEBS[@]}"
 
-# -------- Node + PM2 -------------------------------------------------
+# Node.js + PM2 (if needed)
 if ! command -v node >/dev/null 2>&1; then
   echo "==> Installing Node.js 18.x…"
   curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
   apt-get install -y nodejs
 fi
 if ! command -v pm2 >/dev/null 2>&1; then
-  echo "==> Installing PM2 globally…"
+  echo "==> Installing PM2…"
   npm install -g pm2
 fi
-echo "✅ PM2 installed"
 
-# -------- secure the config before main.py runs ----------------------
-# If config.yaml exists and token is a placeholder, replace it now.
-echo "==> Ensuring config.yaml has a secure token (if present)…"
+# -------- ensure API token in existing config (optional nicety) -----
 if [[ -f "${SCRIPT_DIR}/config.yaml" ]]; then
   if grep -q 'token: your-secure-random-token-here' "${SCRIPT_DIR}/config.yaml"; then
     NEW_TOKEN="$(python3 - <<'PY'
@@ -119,190 +135,93 @@ import secrets; print(secrets.token_urlsafe(64))
 PY
 )"
     sed -i "s|token: your-secure-random-token-here|token: ${NEW_TOKEN}|" "${SCRIPT_DIR}/config.yaml"
-    echo "   -> Replaced placeholder API token"
+    echo "Replaced placeholder API token."
   fi
 fi
 
-# -------- run main.py (writes config, squid.conf, ecosystem, PPP up) -
-echo "==> Running main.py to write configs and bring PPP up…"
+# -------- run main.py to write configs + bring up modem --------------
+echo "==> Running main.py (writes config, brings up cellular)…"
 python3 "${SCRIPT_DIR}/main.py" || true
 
-# -------- apply policy routing to pin Squid to ppp0 --------
-echo "==> Pinning Squid egress to ppp0 (policy routing)…"
+# -------- network policy for Squid: auto-detect iface ----------------
+echo "==> Applying policy routing for Squid (auto-detect iface)…"
 
-# Keep existing default (Wi-Fi/Eth) as primary
-DEF_GW=$(ip route show default | awk '/default/ {print $3; exit}')
-DEF_IF=$(ip route show default | awk '/default/ {print $5; exit}')
-if [[ -n "$DEF_GW" && -n "$DEF_IF" ]]; then
-  sudo ip route replace default via "$DEF_GW" dev "$DEF_IF" metric 100
+# Keep existing default (LAN) as primary route
+DEF_GW="$(${IP_PATH} route show default | awk '/default/ {print $3; exit}')"
+DEF_IF="$(${IP_PATH} route show default | awk '/default/ {print $5; exit}')"
+if [[ -n "${DEF_GW}" && -n "${DEF_IF}" ]]; then
+  ${IP_PATH} route replace default via "${DEF_GW}" dev "${DEF_IF}" metric 100 || true
 fi
 
-# Only proceed if ppp0 exists
-if ip -4 addr show ppp0 >/dev/null 2>&1; then
-  # Ensure a dedicated routing table for PPP
-  grep -q '^100 ppp$' /etc/iproute2/rt_tables || echo '100 ppp' | sudo tee -a /etc/iproute2/rt_tables >/dev/null
+detect_cell_iface() {
+  # Prefer PPP
+  if ${IP_PATH} -4 addr show ppp0 2>/dev/null | grep -q "inet "; then
+    echo "ppp0"; return 0
+  fi
+  # Try common USB-ethernet/QMI names with IPv4
+  for pat in wwan enx usb0 eth1 eth2 eth3; do
+    CAND="$(${IP_PATH} -o link show | awk -F': ' '{print $2}' | grep -E "^${pat}" | head -n1 || true)"
+    if [[ -n "${CAND}" ]] && ${IP_PATH} link show "${CAND}" | grep -q "state UP\|state UNKNOWN"; then
+      if ${IP_PATH} -4 addr show "${CAND}" | grep -q "inet "; then
+        echo "${CAND}"; return 0
+      fi
+    fi
+  done
+  return 1
+}
 
-  # Default route in the PPP table
-  sudo ip route replace default dev ppp0 table ppp
+CELL_IFACE="$(detect_cell_iface || true)"
+if [[ -z "${CELL_IFACE:-}" ]]; then
+  echo "⚠️ No active cellular iface detected (PPP/RNDIS/QMI). Skipping policy routing."
+else
+  echo "   -> Cellular iface: ${CELL_IFACE}"
 
-  # Policy rule: packets marked 0x1 use table 'ppp'
-  sudo ip rule del fwmark 0x1 lookup ppp 2>/dev/null || true
-  sudo ip rule add fwmark 0x1 lookup ppp priority 1000
+  # Ensure routing table 'cellular' (100) exists
+  RT_TABLES="/etc/iproute2/rt_tables"
+  grep -qE "^[[:space:]]*100[[:space:]]+cellular$" "${RT_TABLES}" 2>/dev/null || \
+    echo "100 cellular" >> "${RT_TABLES}"
 
-  # Mark all OUTPUT traffic from Squid user (usually 'proxy') with 0x1
-  if command -v nft >/dev/null 2>&1; then
-    sudo nft add table inet mangle 2>/dev/null || true
-    sudo nft add chain inet mangle output '{ type filter hook output priority mangle ; }' 2>/dev/null || true
-    # delete any old rule first
-    sudo nft list chain inet mangle output 2>/dev/null | grep -q 'meta skuid "proxy" meta mark set 0x1' \
-      && sudo nft delete rule inet mangle output $(sudo nft -a list chain inet mangle output | awk '/meta skuid "proxy" meta mark set 0x1/ {print $(NF)}')
-    sudo nft add rule inet mangle output meta skuid "proxy" meta mark set 0x1
+  # Default route in table 'cellular' via iface (use PPP peer if available)
+  if [[ "${CELL_IFACE}" == "ppp0" ]]; then
+    PPP_GATEWAY="$(${IP_PATH} -4 addr show ppp0 | awk '/peer/ {print $4}' | cut -d/ -f1)"
+    if [[ -n "${PPP_GATEWAY}" && "${PPP_GATEWAY}" != "link" ]]; then
+      ${IP_PATH} route replace default via "${PPP_GATEWAY}" dev "${CELL_IFACE}" table cellular
+    else
+      ${IP_PATH} route replace default dev "${CELL_IFACE}" table cellular
+    fi
   else
-    # iptables-legacy compatibility path
-    sudo iptables -t mangle -D OUTPUT -m owner --uid-owner proxy -j MARK --set-mark 1 2>/dev/null || true
-    sudo iptables -t mangle -A OUTPUT -m owner --uid-owner proxy -j MARK --set-mark 1
+    ${IP_PATH} route replace default dev "${CELL_IFACE}" table cellular
   fi
 
-  # Avoid rp_filter dropping asymmetric replies from ppp0
-  echo 'net.ipv4.conf.all.rp_filter=2' | sudo tee /etc/sysctl.d/99-ppp-rpf.conf >/dev/null
-  sudo sysctl --system >/dev/null || true
+  # Policy rule: fwmark 0x1 -> cellular
+  ${IP_PATH} rule add fwmark 0x1 table cellular pref 100 2>/dev/null || true
 
-  echo "✅ Squid egress pinned to ppp0; Wi-Fi/Eth remains the system default."
-else
-  echo "⚠️ ppp0 not up yet; policy routing will be applied next run/rotation."
+  # Mark Squid traffic (user 'proxy') and helper procs (root) with 0x1
+  ${IPTABLES_PATH} -t mangle -D OUTPUT -m owner --uid-owner proxy -j MARK --set-mark 1 2>/dev/null || true
+  ${IPTABLES_PATH} -t mangle -D OUTPUT -m owner --uid-owner root  -j MARK --set-mark 1 2>/dev/null || true
+  ${IPTABLES_PATH} -t mangle -A OUTPUT -m owner --uid-owner proxy -j MARK --set-mark 1
+  ${IPTABLES_PATH} -t mangle -A OUTPUT -m owner --uid-owner root  -j MARK --set-mark 1
+
+  # NAT on cellular egress
+  ${IPTABLES_PATH} -t nat -C POSTROUTING -o "${CELL_IFACE}" -j MASQUERADE 2>/dev/null || \
+    ${IPTABLES_PATH} -t nat -A POSTROUTING -o "${CELL_IFACE}" -j MASQUERADE
+
+  echo "✅ Policy routing active: fwmark 0x1 -> table 'cellular' -> ${CELL_IFACE}"
+  ${IP_PATH} route show table cellular || true
 fi
 
-# -------- ensure services are in correct state ------------------------
-# ensure Squid is enabled and running (usually auto-starts after install)
-systemctl enable --now squid || true
+# -------- restart squid to load squid.conf ---------------------------
+echo "==> Restarting squid…"
+${SYSTEMCTL_PATH} restart squid || true
 
-# restart Squid to pick up new configuration (RNDIS routing, etc.)
-echo "==> Restarting Squid to apply new configuration..."
-systemctl restart squid || true
+# -------- start PM2 apps as the real user ----------------------------
+echo "==> Starting PM2 apps under ${REAL_USER}…"
+sudo -u "${REAL_USER}" -H pm2 start "${SCRIPT_DIR}/ecosystem.config.js" || true
+sudo -u "${REAL_USER}" -H pm2 save || true
+sudo -u "${REAL_USER}" -H pm2 status || true
 
-# Test proxy after Squid restart
-echo "==> Testing proxy after configuration..."
-LAN_IP="$(ip -4 addr show wlan0 | awk '/inet /{print $2}' | cut -d/ -f1)"
-if [[ -z "${LAN_IP}" ]]; then
-  LAN_IP="$(ip -4 addr show eth0 | awk '/inet /{print $2}' | cut -d/ -f1)"
-fi
-
-if [[ -n "${LAN_IP}" ]]; then
-  PROXY_TEST_IP="$(curl -s --max-time 10 -x "http://${LAN_IP}:3128" https://api.ipify.org 2>/dev/null || echo 'Failed')"
-  if [[ "${PROXY_TEST_IP}" != "Failed" ]]; then
-    echo "✅ Proxy test successful - IP via proxy: ${PROXY_TEST_IP}"
-  else
-    echo "⚠️ Proxy test failed - check Squid configuration"
-  fi
-fi
-
-# ensure ModemManager is not holding ports for PPP (main.py stops it, but keep idempotent)
-systemctl stop ModemManager || true
-
-# ---- make sure PM2 is NOT running as root --------------------------------
-echo "==> Cleaning any root PM2 instance…"
-pm2 kill || true
-systemctl disable --now pm2-root 2>/dev/null || true
-rm -rf /root/.pm2 || true
-
-# ---- start orchestrator with PM2 as REAL_USER -----------------------------
-echo "==> Starting PM2 apps as ${REAL_USER}…"
-
-# wipe the user's stale process list/dump to avoid pm_id ghost refs
-sudo -u "${REAL_USER}" pm2 delete all || true
-sudo -u "${REAL_USER}" pm2 kill || true
-rm -f "${REAL_HOME}/.pm2/dump.pm2"
-
-# ensure ecosystem.config.js exists before pm2 start
-[[ -f "${SCRIPT_DIR}/ecosystem.config.js" ]] || python3 "${SCRIPT_DIR}/main.py" --ecosystem-only
-
-# brief wait to ensure all services are stable before starting PM2
-echo "==> Waiting for services to stabilize..."
-sleep 3
-
-# start all apps from ecosystem (orchestrator + web interface)
-sudo -u "${REAL_USER}" pm2 start "${SCRIPT_DIR}/ecosystem.config.js"
-
-# save and enable at boot
-sudo -u "${REAL_USER}" pm2 save || true
-START_CMD=$(sudo -u "${REAL_USER}" pm2 startup systemd -u "${REAL_USER}" --hp "${REAL_HOME}" | tail -n 1 | sed 's/^.*PM2.*: //')
-if [[ -z "${START_CMD}" ]]; then
-  START_CMD="sudo env PATH=$PATH pm2 startup systemd -u ${REAL_USER} --hp ${REAL_HOME} -y"
-fi
-eval "${START_CMD}" || true
-
-# brief status
-sudo -u "${REAL_USER}" pm2 ls || true
-
-# verify orchestrator is actually responding
-echo "==> Verifying orchestrator API..."
-for i in {1..10}; do
-  if curl -s --max-time 2 http://127.0.0.1:8088/status >/dev/null 2>&1; then
-    echo "✅ Orchestrator API responding"
-    break
-  fi
-  if [ $i -eq 10 ]; then
-    echo "⚠️ Orchestrator API not responding - may need manual restart"
-  fi
-  sleep 1
-done
-
-# -------- check if optimization should run ----------------------------
-echo "==> Checking optimization settings..."
-sudo -u "${REAL_USER}" python3 "${SCRIPT_DIR}/check_optimization.py"
-if [ $? -eq 0 ]; then
-  echo "✅ Optimization check complete"
-  # If optimization flag was enabled and now disabled, restart PM2
-  if grep -q "Optimization complete" "${SCRIPT_DIR}/optimization.log" 2>/dev/null; then
-    echo "==> Restarting orchestrator with optimized settings..."
-    sudo -u "${REAL_USER}" pm2 restart 4g-proxy-orchestrator
-    sleep 3
-  fi
-else
-  echo "⚠️ Optimization check encountered issues (continuing anyway)"
-fi
-
-# -------- final health check ----------------------------------------------
-echo "==> Final API health check..."
-if curl -s --max-time 5 http://127.0.0.1:8088/status >/dev/null; then
-  echo "✅ API is healthy"
-else
-  echo "⚠️ API health check failed"
-fi
-
-LAN_IP="$(ip -4 addr show wlan0 | awk '/inet /{print $2}' | cut -d/ -f1)"
-if [[ -z "${LAN_IP}" ]]; then
-  LAN_IP="$(ip -4 addr show eth0 | awk '/inet /{print $2}' | cut -d/ -f1)"
-fi
-
-DIRECT_IP="$(curl -s --max-time 8 https://api.ipify.org || echo 'Unknown')"
-PROXY_IP="Unknown"
-if [[ -n "${LAN_IP}" ]]; then
-  PROXY_IP="$(curl -s --max-time 10 -x "http://${LAN_IP}:3128" https://api.ipify.org || echo 'Unknown')"
-fi
-
-echo
-echo "============================================================"
-echo "🎉 SETUP COMPLETE!"
-echo "============================================================"
-echo "📡 HTTP Proxy: ${LAN_IP:-<LAN>}:3128"
-echo "🌐 Direct IP: ${DIRECT_IP}"
-echo "🌐 Proxy IP:  ${PROXY_IP}"
-echo "📊 API:       http://127.0.0.1:8088"
-echo "PM2 (user):   ${REAL_USER}"
-echo "============================================================"
-
-# -------- optional: one-shot rotation on first install --------------
-# Set RUN_ROTATE=1 in the environment to force a single rotation now.
-if [[ "${RUN_ROTATE:-0}" == "1" ]]; then
-  echo "==> Triggering one-shot rotation (RUN_ROTATE=1)…"
-  
-  # Ensure jq is available for JSON formatting
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "==> Installing jq for JSON formatting..."
-    apt update -qq && apt install -y jq
-  fi
-  
-  TOKEN="$(python3 -c 'import yaml,sys; print(yaml.safe_load(open("config.yaml"))["api"]["token"])')"
-  curl -s -X POST -H "Authorization: Bearer ${TOKEN}" http://127.0.0.1:8088/rotate | jq . || true
-fi
+echo "==> Done."
+echo "Try:"
+LAN_IP="$(hostname -I | awk '{print $1}')"
+echo "  curl -s https://api.ipify.org && echo"
+echo "  curl -x http://${LAN_IP}:3128 -s https://api.ipify.org && echo"

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Raspberry Pi 5 + SIM7600E-H 4G Proxy - EE UK Optimized
-- Optimized for EE UK networks (APN: everywhere)
-- Auto-detects RNDIS interface (enx*) for fast connection
-- Falls back to PPP with EE-specific configuration if RNDIS fails
+Raspberry Pi 5 + SIM7600E-H 4G Proxy - Auto Setup (RNDIS + PPP fallback)
+- Detects and uses RNDIS/ECM interface (enx*/eth1/usb0) for cellular connection
+- Optional QMI bring-up (best effort) with dhclient for DHCP
+- Falls back to PPP if RNDIS/QMI is not available
 - Prevents modem lockouts with proper error handling
 - Idempotently writes: config.yaml, squid.conf, ecosystem.config.js
 - Safe routing that preserves LAN connectivity
+- Carrier-aware PPP/QMI setup via carriers.json (EE / Three / others)
 """
 
 import os
@@ -48,6 +49,7 @@ IP_PATH = which("ip", "/usr/sbin/ip")
 PPPD_PATH = which("pppd", "/usr/sbin/pppd")
 CHAT_PATH = which("chat", "/usr/sbin/chat")
 SYSTEMCTL_PATH = which("systemctl", "/bin/systemctl")
+DHCLIENT_PATH = which("dhclient", "/sbin/dhclient")  # used for RNDIS/QMI DHCP
 
 # ---------- IP helpers ----------
 
@@ -72,189 +74,22 @@ def detect_lan_ip():
     finally:
         s.close()
 
-# ---------- modem detection (QMI + RNDIS + PPP) ----------
+# ---------- carriers / APN auto-detect ----------
 
-def detect_qmi_interface():
-    """Detect QMI interface (wwan*) that provides cellular connectivity."""
+def load_carriers():
+    """Load carriers.json mapping (APN templates)."""
+    path = BASE / "carriers.json"
     try:
-        out, _, _ = run_cmd([IP_PATH, "-br", "link", "show"], check=False)
-        for line in out.splitlines():
-            if line.startswith("wwan"):
-                parts = line.split()
-                iface = parts[0]
-                # Check if interface has an IP address
-                ip = detect_ipv4(iface)
-                if ip:
-                    print(f"  ✅ QMI interface found: {iface} with IP {ip}")
-                    return iface, ip
-                else:
-                    print(f"  🔍 QMI interface found: {iface} (no IP yet)")
-                    return iface, None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("carriers", {})
     except Exception:
-        pass
-    return None, None
+        return {}
 
-def switch_modem_to_qmi():
-    """Switch modem to QMI mode using AT commands."""
-    try:
-        print("  🔄 Checking if modem needs to be switched to QMI mode...")
-        
-        # Find modem control port
-        modem_dev = "/dev/ttyUSB2"
-        if not os.path.exists(modem_dev):
-            modem_dev = "/dev/ttyUSB0"
-        
-        if not os.path.exists(modem_dev):
-            print("  ⚠️ No modem control port found")
-            return False
-        
-        with serial.Serial(modem_dev, 115200, timeout=5) as ser:
-            # Check current mode
-            ser.write(b"AT+CUSBPIDSWITCH?\r\n")
-            time.sleep(1)
-            response = ser.read(1000).decode('utf-8', errors='ignore')
-            
-            # If already in QMI mode (9011), skip
-            if '9011' in response:
-                print("  ✅ Modem already in QMI mode")
-                return True
-            
-            # Switch to QMI mode
-            print("  🔧 Switching modem to QMI mode...")
-            ser.write(b"AT+CUSBPIDSWITCH=9011,1,1\r\n")
-            time.sleep(2)
-            response = ser.read(1000).decode('utf-8', errors='ignore')
-            
-            if 'OK' in response:
-                print("  ✅ Modem switched to QMI mode, rebooting...")
-                # Reboot modem
-                ser.write(b"AT+CRESET\r\n")
-                time.sleep(5)
-                print("  ⏳ Waiting 15 seconds for modem to re-enumerate...")
-                time.sleep(15)
-                return True
-            else:
-                print(f"  ⚠️ Failed to switch to QMI mode: {response}")
-                return False
-                
-    except Exception as e:
-        print(f"  ⚠️ Error switching to QMI mode: {e}")
-        return False
-
-def setup_qmi_interface(iface, apn="everywhere"):
-    """Setup QMI interface using qmicli with proper CID management."""
-    print(f"  🔧 Setting up QMI interface: {iface}")
-    
-    # Find QMI device
-    qmi_dev = "/dev/cdc-wdm0"
-    if not os.path.exists(qmi_dev):
-        print(f"  ⚠️ QMI device {qmi_dev} not found")
-        return None
-    
-    # Bring interface up
-    run_cmd(["sudo", IP_PATH, "link", "set", "dev", iface, "up"], check=False)
-    time.sleep(2)
-    
-    # Start network connection with qmicli (keeps CID for later release)
-    print(f"  📡 Starting QMI connection for {iface} with APN: {apn}...")
-    out, err, rc = run_cmd([
-        "sudo", "qmicli", "-d", qmi_dev,
-        "--wds-start-network", f"apn={apn}",
-        "--client-no-release-cid"
-    ], check=False, timeout=30)
-    
-    if rc == 0:
-        # Use udhcpc to get IP from modem
-        print(f"  📡 Getting IP via DHCP for {iface}...")
-        time.sleep(2)
-        
-        # Run udhcpc to configure interface
-        out, err, rc = run_cmd([
-            "sudo", "udhcpc", "-i", iface, "-q"
-        ], check=False, timeout=10)
-        
-        # Check if we got an IP
-        ip = detect_ipv4(iface)
-        if ip:
-            print(f"  ✅ QMI interface {iface} configured with IP: {ip}")
-            return ip
-        else:
-            print(f"  ⚠️ QMI connection started but no IP detected on {iface}")
-    else:
-        print(f"  ⚠️ QMI network start failed: {err}")
-    
-    return None
-
-def activate_modem_via_qmi():
-    """Try to activate modem via QMI interface."""
-    print("📡 Activating SIM7600E-H modem via QMI…")
-    
-    # Try to switch modem to QMI mode if needed
-    switch_modem_to_qmi()
-    
-    # Try to detect existing QMI interface
-    iface, ip = detect_qmi_interface()
-    
-    if iface and ip:
-        print(f"  ✅ QMI interface {iface} already active with IP {ip}")
-        return iface, ip
-    
-    if iface:
-        # Interface exists but no IP, try to get one
-        # Get APN from config
-        global CONFIG
-        apn = CONFIG.get('modem', {}).get('apn', 'everywhere')
-        ip = setup_qmi_interface(iface, apn)
-        if ip:
-            return iface, ip
-    
-    print("  ❌ QMI interface not available")
-    return None, None
-
-def detect_rndis_interface():
-    """Detect RNDIS interface (enx*) that provides cellular connectivity."""
-    try:
-        out, _, _ = run_cmd([IP_PATH, "-br", "link", "show"], check=False)
-        for line in out.splitlines():
-            if line.startswith("enx") or line.startswith("eth1"):
-                parts = line.split()
-                iface = parts[0]
-                # Check if interface has an IP address
-                ip = detect_ipv4(iface)
-                if ip:
-                    print(f"  ✅ RNDIS interface found: {iface} with IP {ip}")
-                    return iface, ip
-                else:
-                    print(f"  🔍 RNDIS interface found: {iface} (no IP yet)")
-                    return iface, None
-    except Exception:
-        pass
-    return None, None
-
-def setup_rndis_interface(iface):
-    """Setup RNDIS interface with DHCP."""
-    print(f"  🔧 Setting up RNDIS interface: {iface}")
-    
-    # Bring interface up
-    run_cmd(["sudo", IP_PATH, "link", "set", "dev", iface, "up"], check=False)
-    time.sleep(2)
-    
-    # Get IP via DHCP
-    print(f"  📡 Getting IP via DHCP for {iface}...")
-    out, err, rc = run_cmd(["sudo", "dhclient", "-v", iface], check=False, timeout=30)
-    
-    if rc == 0:
-        # Check if we got an IP
-        ip = detect_ipv4(iface)
-        if ip:
-            print(f"  ✅ RNDIS interface {iface} configured with IP: {ip}")
-            return ip
-        else:
-            print(f"  ⚠️ DHCP succeeded but no IP detected on {iface}")
-    else:
-        print(f"  ⚠️ DHCP failed for {iface}: {err}")
-    
-    return None
+def at_query(port, cmd, sleep=0.3, read_bytes=2048):
+    with serial.Serial(port, 115200, timeout=1) as ser:
+        ser.write((cmd + "\r\n").encode())
+        time.sleep(sleep)
+        return ser.read(read_bytes).decode(errors="ignore")
 
 def detect_modem_port():
     """Detect AT command port for modem with safe error handling."""
@@ -284,19 +119,264 @@ def detect_modem_port():
                     return port
         except Exception:
             continue
-    
-    print(f"  ⚠️ No responding AT port found, using default: /dev/ttyUSB2")
+
+    print("  ⚠️ No responding AT port found, using default: /dev/ttyUSB2")
     return "/dev/ttyUSB2"
+
+def get_imsi_and_operator():
+    """Return (imsi, operator_name) using AT+CIMI and AT+COPS?"""
+    port = detect_modem_port()
+    imsi = None
+    op = None
+    try:
+        r = at_query(port, "AT+CIMI", sleep=0.5, read_bytes=128)
+        m = re.search(r"\b(\d{15})\b", r)
+        if m:
+            imsi = m.group(1)
+    except Exception:
+        pass
+    try:
+        r = at_query(port, "AT+COPS?", sleep=0.5, read_bytes=256)
+        # +COPS: 0,0,"EE",7   OR   +COPS: 0,2,"23420",7
+        m = re.search(r'\+COPS:.*?"([^"]+)"', r)
+        if m:
+            op = m.group(1).strip()
+    except Exception:
+        pass
+    return imsi, op
+
+def mcc_mnc_from_imsi(imsi):
+    # UK MCC is 234/235. Extract MCC[0:3], MNC[3:5] or [3:6]
+    if not imsi or len(imsi) < 5:
+        return None, None
+    mcc = imsi[:3]
+    mnc2 = imsi[3:5]
+    mnc3 = imsi[3:6] if len(imsi) >= 6 else None
+    return mcc, (mnc3 if mnc3 and mnc3[0] != '0' else mnc2)
+
+def guess_carrier_key(imsi, operator, carriers):
+    """Map to a key in carriers.json (best-effort for EE/Three)."""
+    mcc, mnc = mcc_mnc_from_imsi(imsi)
+    # Simple UK map (avoid hardcoding APNs; just disambiguate name)
+    # EE: 234-30 / 234-33; Three: 234-20 ; O2: 234-10 ; Vodafone: 234-15
+    if mcc == "234" and mnc in {"30", "33"}:
+        return "ee"
+    if mcc == "234" and mnc in {"20"}:
+        # prefer “three” entry if available
+        return "three" if "three" in carriers else "three_payg"
+    # Fallback by operator name
+    if operator:
+        op_low = operator.lower()
+        if "ee" in op_low:
+            return "ee"
+        if "3" == op_low or op_low.startswith("3 ") or "three" in op_low:
+            return "three" if "three" in carriers else "three_payg"
+        if "vodafone" in op_low:
+            return "vodafone_payg" if "vodafone_payg" in carriers else "vodafone"
+        if "o2" in op_low:
+            return "o2_contract" if "o2_contract" in carriers else "o2_payg"
+    # Give back something sensible if present
+    for pref in ("ee", "three", "three_payg"):
+        if pref in carriers:
+            return pref
+    return None
+
+def choose_apn_credentials(configured_apn):
+    """
+    Decide APN/username/password:
+      - if configured_apn == 'auto' (or missing) → detect from SIM using carriers.json
+      - else use configured_apn and try to pull matching creds from carriers.json by value
+    """
+    carriers = load_carriers()
+    # default safe blanks
+    apn, user, pw = None, "", ""
+    if not configured_apn or str(configured_apn).lower() == "auto":
+        print("  🔍 Auto-detecting carrier/APN from SIM…")
+        imsi, operator = get_imsi_and_operator()
+        print(f"    IMSI: {imsi or 'Unknown'}, Operator: {operator or 'Unknown'}")
+        key = guess_carrier_key(imsi, operator, carriers)
+        if key and key in carriers:
+            c = carriers[key]
+            apn = c.get("apn")
+            user = c.get("username") or ""
+            pw = c.get("password") or ""
+            print(f"  ✅ Carrier matched: {c.get('name','unknown')} → APN {apn}")
+    else:
+        apn = configured_apn
+        # best-effort: find a carrier entry with same APN to pick credentials
+        for k, c in carriers.items():
+            if str(c.get("apn","")).lower() == str(apn).lower():
+                user = c.get("username") or ""
+                pw = c.get("password") or ""
+                break
+    # As a last resort, keep EE defaults if apn still empty (UK common)
+    if not apn:
+        apn, user, pw = "everywhere", "eesecure", "secure"  # EE UK
+        print("  ⚠️ Could not auto-detect; falling back to EE defaults (everywhere).")
+    return apn, user, pw
+
+# ---------- modem detection (QMI + RNDIS + PPP) ----------
+
+def detect_qmi_interface():
+    """Detect QMI/WWAN interface (wwan*) that could provide cellular connectivity."""
+    try:
+        out, _, _ = run_cmd([IP_PATH, "-br", "link", "show"], check=False)
+        for line in out.splitlines():
+            if line.startswith("wwan"):
+                parts = line.split()
+                iface = parts[0]
+                ip = detect_ipv4(iface)
+                if ip:
+                    print(f"  ✅ QMI interface found: {iface} with IP {ip}")
+                    return iface, ip
+                else:
+                    print(f"  🔍 QMI interface found: {iface} (no IP yet)")
+                    return iface, None
+    except Exception:
+        pass
+    return None, None
+
+def switch_modem_to_qmi():
+    """
+    Switch modem to QMI/RNDIS-capable USB mode using AT commands.
+    SIM7600: AT+CUSBPIDSWITCH=9011,1,1 → re-enumerates with QMI/RNDIS endpoints.
+    """
+    try:
+        print("  🔄 Checking if modem needs to be switched to QMI/RNDIS USB mode...")
+        modem_dev = detect_modem_port()
+        if not os.path.exists(modem_dev):
+            print("  ⚠️ No modem control port found")
+            return False
+
+        with serial.Serial(modem_dev, 115200, timeout=5) as ser:
+            ser.write(b"AT+CUSBPIDSWITCH?\r\n")
+            time.sleep(1)
+            response = ser.read(1000).decode('utf-8', errors='ignore')
+            if '9011' in response:
+                print("  ✅ Modem already in 9011 (QMI/RNDIS) mode")
+                return True
+
+            print("  🔧 Switching modem to 9011 (QMI/RNDIS) mode...")
+            ser.write(b"AT+CUSBPIDSWITCH=9011,1,1\r\n")
+            time.sleep(2)
+            response = ser.read(1000).decode('utf-8', errors='ignore')
+
+            if 'OK' in response:
+                print("  ✅ Modem switched; rebooting module…")
+                ser.write(b"AT+CRESET\r\n")
+                time.sleep(5)
+                print("  ⏳ Waiting 15 seconds for modem to re-enumerate…")
+                time.sleep(15)
+                return True
+            else:
+                print(f"  ⚠️ Failed to switch to 9011: {response}")
+                return False
+
+    except Exception as e:
+        print(f"  ⚠️ Error switching to QMI/RNDIS mode: {e}")
+        return False
+
+def setup_qmi_interface(iface, apn="everywhere"):
+    """Setup QMI interface using qmicli and DHCP via dhclient."""
+    print(f"  🔧 Setting up QMI interface: {iface}")
+
+    qmi_dev = "/dev/cdc-wdm0"
+    if not os.path.exists(qmi_dev):
+        print(f"  ⚠️ QMI device {qmi_dev} not found")
+        return None
+
+    # Bring interface up
+    run_cmd(["sudo", IP_PATH, "link", "set", "dev", iface, "up"], check=False)
+    time.sleep(2)
+
+    print(f"  📡 Starting QMI connection for {iface} with APN: {apn}...")
+    out, err, rc = run_cmd([
+        "sudo", "qmicli", "-d", qmi_dev,
+        "--wds-start-network", f"apn={apn}",
+        "--client-no-release-cid"
+    ], check=False, timeout=30)
+
+    if rc == 0:
+        print(f"  📡 Getting IP via DHCP (dhclient) for {iface}...")
+        _, err2, rc2 = run_cmd(["sudo", DHCLIENT_PATH, "-v", iface], check=False, timeout=30)
+        ip = detect_ipv4(iface)
+        if ip:
+            print(f"  ✅ QMI interface {iface} configured with IP: {ip}")
+            return ip
+        else:
+            print(f"  ⚠️ QMI connection started but no IP detected on {iface} (dhclient rc={rc2}, err={err2})")
+    else:
+        print(f"  ⚠️ QMI network start failed: {err}")
+
+    return None
+
+def activate_modem_via_qmi(apn):
+    """Try to activate modem via QMI interface."""
+    print("📡 Activating SIM7600E-H modem via QMI…")
+
+    switch_modem_to_qmi()
+
+    iface, ip = detect_qmi_interface()
+    if iface and ip:
+        print(f"  ✅ QMI interface {iface} already active with IP {ip}")
+        return iface, ip
+
+    if iface:
+        ip = setup_qmi_interface(iface, apn)
+        if ip:
+            return iface, ip
+
+    print("  ❌ QMI interface not available")
+    return None, None
+
+def detect_rndis_interface():
+    """Detect RNDIS/ECM interface (enx*/eth1/usb0) that provides cellular connectivity."""
+    try:
+        out, _, _ = run_cmd([IP_PATH, "-br", "link", "show"], check=False)
+        for line in out.splitlines():
+            if line.startswith(("enx", "eth1", "usb0")):
+                parts = line.split()
+                iface = parts[0]
+                ip = detect_ipv4(iface)
+                if ip:
+                    print(f"  ✅ RNDIS/ECM interface found: {iface} with IP {ip}")
+                    return iface, ip
+                else:
+                    print(f"  🔍 RNDIS/ECM interface found: {iface} (no IP yet)")
+                    return iface, None
+    except Exception:
+        pass
+    return None, None
+
+def setup_rndis_interface(iface):
+    """Setup RNDIS/ECM interface with DHCP via dhclient."""
+    print(f"  🔧 Setting up RNDIS/ECM interface: {iface}")
+    run_cmd(["sudo", IP_PATH, "link", "set", "dev", iface, "up"], check=False)
+    time.sleep(2)
+
+    print(f"  📡 Getting IP via DHCP (dhclient) for {iface}...")
+    out, err, rc = run_cmd(["sudo", DHCLIENT_PATH, "-v", iface], check=False, timeout=30)
+
+    if rc == 0:
+        ip = detect_ipv4(iface)
+        if ip:
+            print(f"  ✅ RNDIS/ECM interface {iface} configured with IP: {ip}")
+            return ip
+        else:
+            print(f"  ⚠️ DHCP succeeded but no IP detected on {iface}")
+    else:
+        print(f"  ⚠️ DHCP failed for {iface}: {err}")
+
+    return None
 
 def safe_modem_reset():
     """Safely reset modem to prevent lockouts."""
     print("  🔄 Performing safe modem reset...")
-    
+
     # Kill any existing PPP processes
     run_cmd(["sudo", "pkill", "pppd"], check=False)
     time.sleep(2)
-    
-    # Try to put modem in command mode
+
     try:
         at_port = detect_modem_port()
         with serial.Serial(at_port, 115200, timeout=1) as ser:
@@ -306,98 +386,111 @@ def safe_modem_reset():
             time.sleep(1)
             resp = ser.read_all().decode(errors="ignore")
             if "OK" in resp:
-                print(f"  ✅ Modem reset to command mode")
+                print("  ✅ Modem reset to command mode")
                 return True
     except Exception as e:
         print(f"  ⚠️ Modem reset failed: {e}")
-    
+
     return False
 
-def create_ppp_config(apn: str, at_port: str):
-    chat_file = "/etc/chatscripts/ee-chat"
-    peer_file = "/etc/ppp/peers/ee"
-    log_file = "/var/log/ppp-ee.log"
+def create_ppp_config(apn: str, at_port: str, username: str = "", password: str = ""):
+    """
+    Write PPP chat/peer files.
+    - For EE: username=eesecure, password=secure
+    - For Three: both blank
+    """
+    chat_file = "/etc/chatscripts/carrier-chat"
+    peer_file = "/etc/ppp/peers/carrier"
+    log_file = "/var/log/ppp-carrier.log"
     chap_secrets_file = "/etc/ppp/chap-secrets"
 
     run_cmd(["sudo", "mkdir", "-p", "/etc/chatscripts"], check=False)
     run_cmd(["sudo", "mkdir", "-p", "/etc/ppp/peers"], check=False)
 
-    chat_script = f"""ABORT   BUSY
-ABORT   VOICE
-ABORT   "NO CARRIER"
-ABORT   "NO DIALTONE"
-ABORT   "NO DIAL TONE"
-ABORT   "NO ANSWER"
-ABORT   "DELAYED"
-ABORT   "ERROR"
-ABORT   "+CGATT: 0"
-""  AT
-TIMEOUT 12
-OK  ATH
-OK  ATE1
-OK  AT+CGDCONT=1,"IP","{apn}","",0,0
-OK  ATD*99#
-TIMEOUT 22
-CONNECT ""
+    chat_script = f"""ABORT 'BUSY'
+ABORT 'NO CARRIER'
+ABORT 'ERROR'
+ABORT 'NO DIALTONE'
+ABORT 'NO ANSWER'
+REPORT CONNECT
+TIMEOUT 60
+'' AT
+OK ATZ
+OK AT+CPIN?
+OK AT+CFUN=1
+OK AT+CGATT=1
+OK AT+CGDCONT=1,"IP","{apn}"
+OK ATD*99#
+CONNECT ''
 """
-    (BASE / "ee-chat.tmp").write_text(chat_script, encoding="utf-8")
-    run_cmd(["sudo", "cp", str(BASE / "ee-chat.tmp"), chat_file], check=False)
+    (BASE / "carrier-chat.tmp").write_text(chat_script, encoding="utf-8")
+    run_cmd(["sudo", "cp", str(BASE / "carrier-chat.tmp"), chat_file], check=False)
     run_cmd(["sudo", "chmod", "644", chat_file], check=False)
 
-    # Create CHAP secrets file for EE authentication
-    # Format: client server secret IP
-    chap_secrets_content = """# Secrets for authentication using CHAP
+    # CHAP secrets only if credentials provided
+    if username or password:
+        chap_secrets_content = f"""# Secrets for CHAP
 # client        server  secret                  IP addresses
-eesecure        *       secure                  *
+{username or '*'}        *       {password or '*'}                  *
 """
-    (BASE / "chap-secrets.tmp").write_text(chap_secrets_content, encoding="utf-8")
-    run_cmd(["sudo", "cp", str(BASE / "chap-secrets.tmp"), chap_secrets_file], check=False)
-    run_cmd(["sudo", "chmod", "600", chap_secrets_file], check=False)
+        (BASE / "chap-secrets.tmp").write_text(chap_secrets_content, encoding="utf-8")
+        run_cmd(["sudo", "cp", str(BASE / "chap-secrets.tmp"), chap_secrets_file], check=False)
+        run_cmd(["sudo", "chmod", "600", chap_secrets_file], check=False)
 
+    # pppd peer file
+    name_line = f'name "{username}"' if username else "noauth"
     peer_config = f"""{at_port}
 115200
-noipdefault
-usepeerdns
+crtscts
+lock
+{name_line}
 defaultroute
+usepeerdns
 persist
-noauth
-nocrtscts
-local
-name "eesecure"
+hide-password
+ipcp-accept-local
+ipcp-accept-remote
+noipv6
+noipdefault
+lcp-echo-interval 10
+lcp-echo-failure 6
+noccp
+novj
+novjccomp
+nobsdcomp
+nodeflate
+nopcomp
+noaccomp
 debug
 logfile {log_file}
 connect "{CHAT_PATH} -v -f {chat_file}"
 """
-    (BASE / "ee-peer.tmp").write_text(peer_config, encoding="utf-8")
-    run_cmd(["sudo", "cp", str(BASE / "ee-peer.tmp"), peer_file], check=False)
+    (BASE / "carrier-peer.tmp").write_text(peer_config, encoding="utf-8")
+    run_cmd(["sudo", "cp", str(BASE / "carrier-peer.tmp"), peer_file], check=False)
     run_cmd(["sudo", "chmod", "644", peer_file], check=False)
 
 def setup_rndis_policy_routing(rndis_iface):
-    """Setup policy routing for RNDIS interface (similar to PPP setup)."""
+    """Policy routing for RNDIS/ECM; mark traffic from Squid user 'proxy'."""
     try:
-        print(f"  🔧 Setting up policy routing for RNDIS interface: {rndis_iface}")
-        
-        # Ensure dedicated routing table for RNDIS
+        print(f"  🔧 Setting up policy routing for RNDIS/ECM interface: {rndis_iface}")
         table_id = 101
         table_name = "rndis"
         rt_tables = "/etc/iproute2/rt_tables"
-        
-        # Add routing table if not exists
-        run_cmd(["sudo", "grep", "-q", f"^{table_id} {table_name}$", rt_tables], check=False)
+
+        # Ensure table exists
         if run_cmd(["sudo", "grep", "-q", f"^{table_id} {table_name}$", rt_tables], check=False)[2] != 0:
             run_cmd(["sudo", "bash", "-c", f"echo '{table_id} {table_name}' >> {rt_tables}"], check=False)
-        
+
         # Default route in RNDIS table via RNDIS interface
         run_cmd(["sudo", IP_PATH, "route", "replace", "default", "dev", rndis_iface, "table", table_name], check=False)
-        
-        # Policy rule: packets marked 0x1 use table 'rndis'
+
+        # Policy rule
         run_cmd(["sudo", IP_PATH, "rule", "del", "fwmark", "0x1", "lookup", table_name], check=False)
         run_cmd(["sudo", IP_PATH, "rule", "add", "fwmark", "0x1", "lookup", table_name, "priority", "1001"], check=False)
-        
+
         # Mark all OUTPUT traffic from Squid user with 0x1
         run_cmd(["sudo", "iptables", "-t", "mangle", "-D", "OUTPUT", "-m", "owner", "--uid-owner", "proxy", "-j", "MARK", "--set-mark", "1"], check=False)
         run_cmd(["sudo", "iptables", "-t", "mangle", "-A", "OUTPUT", "-m", "owner", "--uid-owner", "proxy", "-j", "MARK", "--set-mark", "1"], check=False)
-        
         print(f"  ✅ Policy routing configured: Squid traffic via {rndis_iface}")
     except Exception as e:
         print(f"  ⚠️ Policy routing setup failed: {e}")
@@ -437,7 +530,7 @@ def make_token(nbytes: int = 48) -> str:
 def write_config_yaml():
     cfg_path = BASE / "config.yaml"
     is_new_install = not cfg_path.exists()
-    
+
     if cfg_path.exists():
         try:
             existing = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
@@ -446,18 +539,14 @@ def write_config_yaml():
     else:
         existing = {}
 
-    # Smart default for run_optimization:
-    # - NEW install: true (auto-optimize on first setup)
-    # - EXISTING install: false (don't surprise users with 2hr process)
     default_run_optimization = is_new_install
-
     defaults = {
         "lan_bind_ip": detect_lan_ip(),
         "api": {"bind": "127.0.0.1", "port": 8088, "token": make_token()},
         "proxy": {"auth_enabled": False, "user": "", "password": ""},
         "modem": {
-            "mode": "auto",  # "auto" (RNDIS → PPP), "rndis", "ppp"
-            "apn": "everywhere",  # EE UK APN
+            "mode": "auto",        # "auto", "rndis", "qmi", "ppp"
+            "apn": "auto",         # "auto" chooses from carriers.json via SIM
             "port": "/dev/ttyUSB2",
             "timeout": 30
         },
@@ -483,12 +572,12 @@ def write_config_yaml():
             merged[k] = v
 
     cfg_path.write_text(yaml.safe_dump(merged, sort_keys=False), encoding="utf-8")
-    
+
     if is_new_install:
         print(f"  ✅ config.yaml written (LAN={merged['lan_bind_ip']}, NEW INSTALL - optimization enabled)")
     else:
         print(f"  ✅ config.yaml updated (LAN={merged['lan_bind_ip']}, existing settings preserved)")
-    
+
     return merged
 
 def write_squid_conf(cfg: dict, cellular_ip=None):
@@ -497,11 +586,11 @@ def write_squid_conf(cfg: dict, cellular_ip=None):
     user = cfg["proxy"]["user"] or ""
     pw = cfg["proxy"]["password"] or ""
 
-    # Add cellular routing if we have a cellular IP
+    # Add cellular routing if we have a cellular IP (PPP/QMI only)
     cellular_routing = ""
     if cellular_ip:
         cellular_routing = f"""
-# Route traffic through cellular interface
+# Route traffic through cellular interface (ppp/qmi)
 tcp_outgoing_address {cellular_ip}
 """
 
@@ -559,7 +648,7 @@ cache_log /var/log/squid/cache.log
 dns_nameservers 8.8.8.8 1.1.1.1
 """
     (BASE / "squid.conf").write_text(content, encoding="utf-8")
-    run_cmd(["sudo", "chown", "proxyuser:proxyuser", str(BASE / "squid.conf")], check=False)
+    # Ownership by root is fine; Squid reads this as root at startup/reload.
     run_cmd(["sudo", "chmod", "644", str(BASE / "squid.conf")], check=False)
     print("  ✅ squid.conf ready")
 
@@ -602,29 +691,25 @@ def write_ecosystem():
 def activate_modem_via_rndis():
     """Try to activate modem via RNDIS interface."""
     print("📡 Activating SIM7600E-H modem via RNDIS…")
-    
-    # First, try to detect existing RNDIS interface
+
     iface, ip = detect_rndis_interface()
-    
     if iface and ip:
         print(f"  ✅ RNDIS interface {iface} already active with IP {ip}")
         return iface, ip
-    
+
     if iface:
-        # Interface exists but no IP, try to get one
         ip = setup_rndis_interface(iface)
         if ip:
             return iface, ip
-    
+
     print("  ❌ RNDIS interface not available")
     return None, None
 
-def activate_modem_via_ppp(apn: str):
+def activate_modem_via_ppp(apn: str, username: str, password: str):
     """Fallback PPP activation with safety measures."""
     print("📡 Activating SIM7600E-H modem over PPP (fallback)…")
     print(f"  📡 Using APN: {apn}")
 
-    # Perform safe reset first
     safe_modem_reset()
 
     print("  🔄 Stopping conflicts (ModemManager, lingering pppd)…")
@@ -637,76 +722,67 @@ def activate_modem_via_ppp(apn: str):
     print(f"  📡 Using AT port: {at_port}")
 
     print("  🔧 Writing PPP chat/peer files…")
-    create_ppp_config(apn, at_port)
+    create_ppp_config(apn, at_port, username=username, password=password)
 
-    print("  🚀 Starting PPP session (pppd call ee)…")
-    out, err, rc = run_cmd(["sudo", PPPD_PATH, "call", "ee"], check=False, timeout=150)  # Increased from 60 to 150 seconds
+    print("  🚀 Starting PPP session (pppd call carrier)…")
+    out, err, rc = run_cmd(["sudo", PPPD_PATH, "call", "carrier"], check=False, timeout=150)
     if rc != 0 and err:
         print(f"  ⚠️ pppd error: {err}")
 
     print("  ⏳ Waiting for ppp0 IPv4…")
-    for i in range(120):  # Increased from 60 to 120 seconds
+    for i in range(120):
         time.sleep(1)
         out, _, _ = run_cmd([IP_PATH, "-4", "addr", "show", "ppp0"], check=False)
         if "inet " in out:
             print("  ✅ ppp0 is UP with IPv4")
-            return True
-        # Show progress every 10 seconds
+            # try to read ppp0 IP for tcp_outgoing_address if needed
+            ipm = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)/", out)
+            return True, (ipm.group(1) if ipm else None)
         if (i + 1) % 10 == 0:
             print(f"  ⏳ Still waiting... ({i + 1}s)")
 
     print("  ❌ ppp0 did not come up in time.")
-    return False
+    return False, None
 
-def activate_modem(apn: str, mode: str = "auto"):
-    """Main modem activation function with configurable mode.
-    
-    Args:
-        apn: APN to use
-        mode: "auto" (RNDIS → PPP), "qmi" (QMI only), "rndis" (RNDIS only), "ppp" (PPP only)
-    """
+def activate_modem(apn_setting: str, mode: str = "auto", username: str = "", password: str = ""):
+    """Main modem activation with selectable mode."""
     print(f"🚀 Starting modem activation (mode: {mode})...")
-    
+
     if mode == "qmi":
-        # Force QMI mode
         print("  📡 Using QMI mode (forced)")
-        iface, ip = activate_modem_via_qmi()
+        iface, ip = activate_modem_via_qmi(apn_setting)
         if iface and ip:
             return "qmi", iface, ip
         print("  ❌ QMI activation failed")
         return None, None, None
-    
+
     elif mode == "ppp":
-        # Force PPP mode
         print("  📡 Using PPP mode (forced)")
-        if activate_modem_via_ppp(apn):
-            return "ppp", "ppp0", None
+        ok, ppp_ip = activate_modem_via_ppp(apn_setting, username, password)
+        if ok:
+            return "ppp", "ppp0", ppp_ip
         print("  ❌ PPP activation failed")
         return None, None, None
-    
+
     elif mode == "rndis":
-        # Force RNDIS mode
         print("  📡 Using RNDIS mode (forced)")
         iface, ip = activate_modem_via_rndis()
         if iface and ip:
             return "rndis", iface, ip
         print("  ❌ RNDIS activation failed")
         return None, None, None
-    
+
     else:
-        # Auto mode: Try RNDIS first (most common), fallback to PPP
         print("  📡 Auto mode: trying RNDIS → PPP...")
-        
-        # Try RNDIS first (most common for SIM7600E-H)
         iface, ip = activate_modem_via_rndis()
         if iface and ip:
             return "rndis", iface, ip
-        
-        # Fallback to PPP if RNDIS not available
+
         print("  🔄 RNDIS not available, trying PPP fallback...")
-        if activate_modem_via_ppp(apn):
-            return "ppp", "ppp0", None
-        
+        ok, ppp_ip = activate_modem_via_ppp(apn_setting, username, password)
+        if ok:
+            return "ppp", "ppp0", ppp_ip
+
         print("  ❌ Both RNDIS and PPP activation failed")
         return None, None, None
 
@@ -760,11 +836,10 @@ def summary(cfg: dict):
     print("=" * 60)
 
 def main():
-    import sys
     if len(sys.argv) > 1 and sys.argv[1] == "--ecosystem-only":
         write_ecosystem()
         return 0
-    
+
     if os.geteuid() != 0:
         print("❌ Run as root: sudo ./run.sh")
         return 1
@@ -776,28 +851,34 @@ def main():
 
     # Get modem settings from config
     modem_cfg = cfg.get("modem") or {}
-    apn = modem_cfg.get("apn", "everywhere") if isinstance(modem_cfg, dict) else "everywhere"
+    requested_apn = modem_cfg.get("apn", "auto") if isinstance(modem_cfg, dict) else "auto"
     modem_mode = modem_cfg.get("mode", "auto") if isinstance(modem_cfg, dict) else "auto"
-    
+
+    # Decide APN/credentials (auto if 'auto')
+    apn, username, password = choose_apn_credentials(requested_apn)
+
     # Try to activate modem with configured mode
-    mode, iface, cellular_ip = activate_modem(apn, modem_mode)
-    
+    mode, iface, cellular_ip = activate_modem(apn, modem_mode, username=username, password=password)
+
     if mode == "rndis":
         print(f"  ✅ Cellular connection via RNDIS: {iface} ({cellular_ip})")
-        write_squid_conf(cfg)  # Don't pass cellular_ip for RNDIS - use policy routing instead
+        write_squid_conf(cfg)  # policy routing handles egress, no tcp_outgoing_address
         setup_rndis_policy_routing(iface)
         print("  🔄 Squid will be restarted by run.sh to apply new configuration")
     elif mode == "ppp":
         print(f"  ✅ Cellular connection via PPP: {iface}")
-        write_squid_conf(cfg)
+        write_squid_conf(cfg, cellular_ip=cellular_ip)  # set tcp_outgoing_address to PPP IP
         keep_primary_and_add_ppp_secondary()
-        # Restart Squid for PPP mode
+        run_cmd([SYSTEMCTL_PATH, "restart", "squid"], check=False)
+        proxy_test(cfg["lan_bind_ip"])
+    elif mode == "qmi":
+        print(f"  ✅ Cellular connection via QMI: {iface} ({cellular_ip})")
+        write_squid_conf(cfg, cellular_ip=cellular_ip)
         run_cmd([SYSTEMCTL_PATH, "restart", "squid"], check=False)
         proxy_test(cfg["lan_bind_ip"])
     else:
         print("  ⚠️ No cellular connection established; using LAN only")
         write_squid_conf(cfg)
-        # Restart Squid for LAN-only mode
         run_cmd([SYSTEMCTL_PATH, "restart", "squid"], check=False)
         proxy_test(cfg["lan_bind_ip"])
 
