@@ -17,12 +17,11 @@ lan_bind_ip: 192.168.1.37                  # Auto-detected LAN IP (your Pi's IP 
 
 # Modem Settings
 modem:
-  # Connection mode - how the modem connects to cellular network
-  # "rndis" - RNDIS/USB ethernet (recommended for SIM7600E-H, stable and simple)
-  # "auto"  - Try RNDIS first, fallback to PPP (good for most setups)
-  # "qmi"   - QMI mode (advanced, only if you know you need it)
-  # "ppp"   - PPP dial-up (legacy fallback)
-  mode: rndis
+  # Connection mode - optimized for EE UK networks
+  # "auto"  - Try RNDIS first, fallback to PPP (recommended for EE)
+  # "rndis" - RNDIS/USB ethernet (fast, but may need policy routing fixes)
+  # "ppp"   - PPP dial-up (reliable fallback for EE)
+  mode: auto
   
   # APN (Access Point Name) - auto-detected from carriers.json
   apn: everywhere

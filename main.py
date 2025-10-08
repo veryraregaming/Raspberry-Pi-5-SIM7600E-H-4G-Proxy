@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Raspberry Pi 5 + SIM7600E-H 4G Proxy - Auto Setup (RNDIS + PPP fallback)
-- Detects and uses RNDIS interface (enx*) for cellular connection
-- Falls back to PPP if RNDIS is not available
+Raspberry Pi 5 + SIM7600E-H 4G Proxy - EE UK Optimized
+- Optimized for EE UK networks (APN: everywhere)
+- Auto-detects RNDIS interface (enx*) for fast connection
+- Falls back to PPP with EE-specific configuration if RNDIS fails
 - Prevents modem lockouts with proper error handling
 - Idempotently writes: config.yaml, squid.conf, ecosystem.config.js
 - Safe routing that preserves LAN connectivity
@@ -455,8 +456,8 @@ def write_config_yaml():
         "api": {"bind": "127.0.0.1", "port": 8088, "token": make_token()},
         "proxy": {"auth_enabled": False, "user": "", "password": ""},
         "modem": {
-            "mode": "rndis",  # "rndis" (recommended), "qmi", "ppp"
-            "apn": "everywhere",
+            "mode": "auto",  # "auto" (RNDIS → PPP), "rndis", "ppp"
+            "apn": "everywhere",  # EE UK APN
             "port": "/dev/ttyUSB2",
             "timeout": 30
         },
