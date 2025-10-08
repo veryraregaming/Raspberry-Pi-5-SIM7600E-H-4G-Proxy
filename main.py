@@ -415,7 +415,7 @@ def write_config_yaml():
         "api": {"bind": "127.0.0.1", "port": 8088, "token": make_token()},
         "proxy": {"auth_enabled": False, "user": "", "password": ""},
         "modem": {
-            "mode": "auto",  # "auto", "rndis", "ppp"
+            "mode": "rndis",  # "rndis" (recommended), "qmi", "ppp"
             "apn": "everywhere",
             "port": "/dev/ttyUSB2",
             "timeout": 30
