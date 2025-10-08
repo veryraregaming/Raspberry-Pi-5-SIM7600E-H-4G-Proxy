@@ -130,12 +130,27 @@ if [[ -z "${CELL_IFACE:-}" ]]; then
 else
   echo "   -> cellular iface: ${CELL_IFACE}"
   $IP link set dev "${CELL_IFACE}" up || true
+  
+  # Ensure cellular interface is properly up and connected
+  echo "   -> Ensuring cellular interface is connected..."
+  sleep 2
+  $IP link set dev "${CELL_IFACE}" up || true
+  
+  # Test if cellular interface can reach internet, if not try to establish connection
+  if ! ping -I "${CELL_IFACE}" -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+    echo "   -> Cellular interface not connected, attempting to establish connection..."
+    # Try dhclient to get proper IP configuration
+    $DHCLIENT -v "${CELL_IFACE}" 2>/dev/null || true
+    sleep 3
+    # Bring interface up again after dhclient
+    $IP link set dev "${CELL_IFACE}" up || true
+  fi
 
   # Ensure 'cellular' table exists
   RT_TABLES="/etc/iproute2/rt_tables"
   grep -qE "^[[:space:]]*100[[:space:]]+cellular$" "${RT_TABLES}" 2>/dev/null || echo "100 cellular" >> "${RT_TABLES}"
 
-  # Write default route in cellular table
+  # Write default route in cellular table with proper gateway
   if [[ "${CELL_IFACE}" == "ppp0" ]]; then
     PPP_GW="$($IP -4 addr show ppp0 | awk '/peer/ {print $4}' | cut -d/ -f1)"
     if [[ -n "${PPP_GW}" && "${PPP_GW}" != "link" ]]; then
@@ -144,7 +159,13 @@ else
       $IP route replace default dev ppp0 table cellular
     fi
   else
-    $IP route replace default dev "${CELL_IFACE}" table cellular
+    # For RNDIS/QMI interfaces, get the gateway from the interface's route
+    CELL_GW="$($IP route show dev "${CELL_IFACE}" | awk '/default/ {print $3}' | head -n1)"
+    if [[ -n "${CELL_GW}" ]]; then
+      $IP route replace default via "${CELL_GW}" dev "${CELL_IFACE}" table cellular
+    else
+      $IP route replace default dev "${CELL_IFACE}" table cellular
+    fi
   fi
 
   # Single policy rule for marked traffic
