@@ -316,6 +316,7 @@ def create_ppp_config(apn: str, at_port: str):
     chat_file = "/etc/chatscripts/ee-chat"
     peer_file = "/etc/ppp/peers/ee"
     log_file = "/var/log/ppp-ee.log"
+    chap_secrets_file = "/etc/ppp/chap-secrets"
 
     run_cmd(["sudo", "mkdir", "-p", "/etc/chatscripts"], check=False)
     run_cmd(["sudo", "mkdir", "-p", "/etc/ppp/peers"], check=False)
@@ -340,13 +341,22 @@ CONNECT ''
     run_cmd(["sudo", "cp", str(BASE / "ee-chat.tmp"), chat_file], check=False)
     run_cmd(["sudo", "chmod", "644", chat_file], check=False)
 
+    # Create CHAP secrets file for EE authentication
+    # Format: client server secret IP
+    chap_secrets_content = """# Secrets for authentication using CHAP
+# client        server  secret                  IP addresses
+eesecure        *       secure                  *
+"""
+    (BASE / "chap-secrets.tmp").write_text(chap_secrets_content, encoding="utf-8")
+    run_cmd(["sudo", "cp", str(BASE / "chap-secrets.tmp"), chap_secrets_file], check=False)
+    run_cmd(["sudo", "chmod", "600", chap_secrets_file], check=False)
+
     peer_config = f"""{at_port}
 115200
 crtscts
 lock
 noauth
-user "eesecure"
-password "secure"
+name "eesecure"
 defaultroute
 usepeerdns
 persist
