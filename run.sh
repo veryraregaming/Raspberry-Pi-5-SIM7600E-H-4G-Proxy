@@ -145,6 +145,18 @@ else
     # Bring interface up again after dhclient
     $IP link set dev "${CELL_IFACE}" up || true
   fi
+  
+  # Ensure cellular interface stays up and has internet connectivity
+  echo "   -> Ensuring cellular interface maintains connection..."
+  $IP link set dev "${CELL_IFACE}" up || true
+  sleep 2
+  # Test connectivity again and retry if needed
+  if ! ping -I "${CELL_IFACE}" -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+    echo "   -> Retrying cellular connection..."
+    $DHCLIENT -v "${CELL_IFACE}" 2>/dev/null || true
+    sleep 2
+    $IP link set dev "${CELL_IFACE}" up || true
+  fi
 
   # Ensure 'cellular' table exists
   RT_TABLES="/etc/iproute2/rt_tables"
@@ -239,6 +251,25 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable raspi-4g-proxy.service >/dev/null
+
+# Create a service to keep cellular interface up
+echo "==> Creating cellular interface keepalive service…"
+cat >/etc/systemd/system/cellular-keepalive.service <<KEEPALIVE
+[Unit]
+Description=Keep cellular interface up and connected
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'ip link set ${CELL_IFACE} up && dhclient ${CELL_IFACE}'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+KEEPALIVE
+
+systemctl daemon-reload
+systemctl enable cellular-keepalive.service >/dev/null
 
 echo
 echo "==> Health:"
