@@ -345,6 +345,8 @@ CONNECT ''
 crtscts
 lock
 noauth
+user "eesecure"
+password "secure"
 defaultroute
 usepeerdns
 persist
