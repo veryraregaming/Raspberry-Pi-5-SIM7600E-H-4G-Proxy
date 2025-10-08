@@ -253,13 +253,22 @@ else
   $IP rule del fwmark 0x1 table cellular 2>/dev/null || true
   $IP rule add fwmark 0x1 table cellular pref 100
 
-  # Mark ONLY Squid processes (both UID and GID; cover 'proxy' & 'squid')
+  # Mark ONLY Squid processes (with proper exclusions to avoid breaking DNS and LAN responses)
+  # Clear existing mangle OUTPUT rules
+  $IPTABLES -t mangle -F OUTPUT 2>/dev/null || true
+  
+  # CRITICAL: Add exclusion rules BEFORE marking
+  # 1. Don't mark DNS queries (UDP port 53) - they need to go via normal routing
+  $IPTABLES -t mangle -A OUTPUT -p udp --dport 53 -j RETURN
+  
+  # 2. Don't mark replies to established LAN connections - prevents asymmetric routing
+  $IPTABLES -t mangle -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -d 192.168.0.0/16 -j RETURN
+  
+  # 3. Now mark proxy/squid user traffic to route via cellular
   for U in proxy squid; do
     if id -u "$U" >/dev/null 2>&1; then
-      $IPTABLES -t mangle -D OUTPUT -m owner --uid-owner "$U" -j MARK --set-mark 1 2>/dev/null || true
       $IPTABLES -t mangle -A OUTPUT -m owner --uid-owner "$U" -j MARK --set-mark 1
-      $IPTABLES -t mangle -D OUTPUT -m owner --gid-owner "$U" -j MARK --set-mark 1 2>/dev/null || true
-      $IPTABLES -t mangle -A OUTPUT -m owner --gid-owner "$U" -j MARK --set-mark 1
+      echo "   -> Marked ${U} user traffic for cellular routing (with DNS and LAN exclusions)"
     fi
   done
 
