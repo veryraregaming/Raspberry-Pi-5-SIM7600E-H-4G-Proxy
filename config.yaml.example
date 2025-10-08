@@ -19,8 +19,9 @@ lan_bind_ip: 192.168.1.37                  # Auto-detected LAN IP (your Pi's IP 
 modem:
   # Connection mode - how the modem connects to cellular network
   # "rndis" - RNDIS/USB ethernet (recommended for SIM7600E-H, stable and simple)
-  # "qmi"   - QMI mode (alternative for some modems, may offer better IP rotation)
-  # "ppp"   - PPP dial-up (legacy fallback, not recommended)
+  # "auto"  - Try RNDIS first, fallback to PPP (good for most setups)
+  # "qmi"   - QMI mode (advanced, only if you know you need it)
+  # "ppp"   - PPP dial-up (legacy fallback)
   mode: rndis
   
   # APN (Access Point Name) - auto-detected from carriers.json

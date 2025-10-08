@@ -619,7 +619,7 @@ def activate_modem(apn: str, mode: str = "auto"):
     
     Args:
         apn: APN to use
-        mode: "auto" (QMI → RNDIS → PPP), "qmi" (QMI only), "rndis" (RNDIS only), "ppp" (PPP only)
+        mode: "auto" (RNDIS → PPP), "qmi" (QMI only), "rndis" (RNDIS only), "ppp" (PPP only)
     """
     print(f"🚀 Starting modem activation (mode: {mode})...")
     
@@ -650,26 +650,20 @@ def activate_modem(apn: str, mode: str = "auto"):
         return None, None, None
     
     else:
-        # Auto mode: Try QMI first (best for IP rotation), then RNDIS, fallback to PPP
-        print("  📡 Auto mode: trying QMI → RNDIS → PPP...")
+        # Auto mode: Try RNDIS first (most common), fallback to PPP
+        print("  📡 Auto mode: trying RNDIS → PPP...")
         
-        # Try QMI first (most reliable for IP rotation)
-        iface, ip = activate_modem_via_qmi()
-        if iface and ip:
-            return "qmi", iface, ip
-        
-        # Try RNDIS second
-        print("  🔄 QMI failed, trying RNDIS...")
+        # Try RNDIS first (most common for SIM7600E-H)
         iface, ip = activate_modem_via_rndis()
         if iface and ip:
             return "rndis", iface, ip
         
-        # Fallback to PPP
-        print("  🔄 RNDIS failed, trying PPP fallback...")
+        # Fallback to PPP if RNDIS not available
+        print("  🔄 RNDIS not available, trying PPP fallback...")
         if activate_modem_via_ppp(apn):
             return "ppp", "ppp0", None
         
-        print("  ❌ QMI, RNDIS, and PPP activation all failed")
+        print("  ❌ Both RNDIS and PPP activation failed")
         return None, None, None
 
 def proxy_test(lan_ip: str):
