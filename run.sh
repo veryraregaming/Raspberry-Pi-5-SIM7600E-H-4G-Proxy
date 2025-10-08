@@ -157,6 +157,15 @@ else
     sleep 2
     $IP link set dev "${CELL_IFACE}" up || true
   fi
+  
+  # CRITICAL: Ensure WiFi remains the default route (not cellular)
+  echo "   -> Ensuring WiFi stays as default route..."
+  DEF_GW="$($IP route show default | awk '/default/ {print $3; exit}')"
+  DEF_IF="$($IP route show default | awk '/default/ {print $5; exit}')"
+  if [[ -n "${DEF_GW}" && -n "${DEF_IF}" && "${DEF_IF}" != "${CELL_IFACE}" ]]; then
+    $IP route replace default via "${DEF_GW}" dev "${DEF_IF}" metric 100 || true
+    echo "   -> Default route: ${DEF_GW} via ${DEF_IF}"
+  fi
 
   # Ensure 'cellular' table exists
   RT_TABLES="/etc/iproute2/rt_tables"
