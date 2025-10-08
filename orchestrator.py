@@ -369,11 +369,7 @@ def detect_qmi_interface():
         result = subprocess.run([ip_cmd, "-br", "link", "show"],
                                 capture_output=True, text=True, check=False, timeout=5)
         if result.returncode != 0:
-            print(f"detect_qmi_interface: ip link failed: {result.stderr}")
             return None, False
-
-        print(f"detect_qmi_interface: Checking interfaces...")
-        print(f"detect_qmi_interface: Output: {result.stdout[:200]}")
 
         for line in result.stdout.splitlines():
             line = line.strip()
@@ -382,27 +378,21 @@ def detect_qmi_interface():
                 if not parts:
                     continue
                 iface = parts[0]
-                print(f"detect_qmi_interface: Found interface {iface}")
 
                 # Check if interface has an IP address
                 ip_result = subprocess.run([ip_cmd, "-4", "addr", "show", iface],
                                            capture_output=True, text=True, check=False, timeout=5)
                 if ip_result.returncode != 0:
-                    print(f"detect_qmi_interface: ip addr failed for {iface}: {ip_result.stderr}")
                     return iface, False
 
                 if "inet " in ip_result.stdout:
-                    print(f"detect_qmi_interface: Interface {iface} has IP")
                     return iface, True
                 else:
-                    print(f"detect_qmi_interface: Interface {iface} has no IP")
                     return iface, False
 
-        print("detect_qmi_interface: No QMI interfaces found in output")
     except Exception as e:
-        print(f"detect_qmi_interface: Exception: {e}")
-        import traceback
-        traceback.print_exc()
+        # Only log exceptions during rotation or startup, not on every status check
+        pass
     return None, False
 
 def get_original_imei():
@@ -694,11 +684,7 @@ def detect_rndis_interface():
         result = subprocess.run([ip_cmd, "-br", "link", "show"],
                                 capture_output=True, text=True, check=False, timeout=5)
         if result.returncode != 0:
-            print(f"detect_rndis_interface: ip link failed: {result.stderr}")
             return None, False
-
-        print(f"detect_rndis_interface: Checking interfaces...")
-        print(f"detect_rndis_interface: Output: {result.stdout[:200]}")
 
         for line in result.stdout.splitlines():
             line = line.strip()
@@ -707,27 +693,21 @@ def detect_rndis_interface():
                 if not parts:
                     continue
                 iface = parts[0]
-                print(f"detect_rndis_interface: Found interface {iface}")
 
                 # Check if interface has an IP address
                 ip_result = subprocess.run([ip_cmd, "-4", "addr", "show", iface],
                                            capture_output=True, text=True, check=False, timeout=5)
                 if ip_result.returncode != 0:
-                    print(f"detect_rndis_interface: ip addr failed for {iface}: {ip_result.stderr}")
                     return iface, False
 
                 if "inet " in ip_result.stdout:
-                    print(f"detect_rndis_interface: Interface {iface} has IP")
                     return iface, True
                 else:
-                    print(f"detect_rndis_interface: Interface {iface} has no IP")
                     return iface, False
 
-        print("detect_rndis_interface: No RNDIS interfaces found in output")
     except Exception as e:
-        print(f"detect_rndis_interface: Exception: {e}")
-        import traceback
-        traceback.print_exc()
+        # Only log exceptions during rotation or startup, not on every status check
+        pass
     return None, False
 
 def deep_reset_rndis_modem(randomise_imei_enabled=False):
