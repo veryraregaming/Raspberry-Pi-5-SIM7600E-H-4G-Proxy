@@ -23,7 +23,7 @@ else
   echo "[4gproxy-net] ❌ ppp0 not found or no IPv4, checking other patterns."
   for pattern in 'wwan' 'ppp' 'usb' 'eth1' 'eth2' 'eth3' 'enx' 'cdc' 'usb0'; do
     CAND=$(ip -o link show | awk -F': ' '{print $2}' | grep -E "^${pattern}" | head -n1 || true)
-    if [[ -n "${CAND:-}" ]]; then
+    if [[ -n "${CAND}" ]]; then
       if [[ "${CAND}" == "eth0" || "${CAND}" == "wlan0" ]]; then
         echo "[4gproxy-net] Skipping ${CAND} (home network interface)"
         continue
@@ -76,11 +76,9 @@ fi
 # 5) ip rule for fwmark==1 -> proxy_table
 ip rule add fwmark 0x1 table "${TABLE_ID}" pref 100 2>/dev/null || true
 
-# 6) mark packets from Squid user 'proxy' and from root (for Squid helper procs)
+# 6) mark packets ONLY from Squid user 'proxy' (DO NOT MARK root)
 iptables -t mangle -D OUTPUT -m owner --uid-owner proxy -j MARK --set-mark 1 2>/dev/null || true
-iptables -t mangle -D OUTPUT -m owner --uid-owner root -j MARK --set-mark 1 2>/dev/null || true
 iptables -t mangle -A OUTPUT -m owner --uid-owner proxy -j MARK --set-mark 1
-iptables -t mangle -A OUTPUT -m owner --uid-owner root -j MARK --set-mark 1
 
 # 7) NAT only when leaving the cellular iface
 iptables -t nat -C POSTROUTING -o "${CELL_IFACE}" -j MASQUERADE 2>/dev/null || \
