@@ -353,6 +353,13 @@ ipcp-accept-local
 ipcp-accept-remote
 lcp-echo-interval 10
 lcp-echo-failure 6
+noccp
+novj
+novjccomp
+nobsdcomp
+nodeflate
+nopcomp
+noaccomp
 debug
 logfile {log_file}
 connect "{CHAT_PATH} -v -f {chat_file}"
