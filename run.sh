@@ -108,12 +108,13 @@ systemctl restart squid || true
 LAN_IP="$(ip -4 addr show eth0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)"
 [[ -z "$LAN_IP" ]] && LAN_IP="$(ip -4 addr show wlan0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)"
 
-echo "==> Keep LAN default route as primary…"
-DEF_GW="$($IP route show default | awk '/default/ {print $3; exit}')"
-DEF_IF="$($IP route show default | awk '/default/ {print $5; exit}')"
-if [[ -n "${DEF_GW}" && -n "${DEF_IF}" ]]; then
-  $IP route replace default via "${DEF_GW}" dev "${DEF_IF}" metric 100 || true
-fi
+# ==============================================================================
+# ROUTING PRINCIPLE:
+# - Main routing table: WiFi/Ethernet stays untouched (SSH, system traffic)
+# - Cellular table (100): 4G route ONLY for marked traffic
+# - Policy: ONLY Squid (proxy/squid UID/GID) gets fwmark 0x1 → cellular table
+# - Result: Proxy uses 4G exclusively; everything else uses WiFi/Eth
+# ==============================================================================
 
 echo "==> Detect cellular iface (PPP/RNDIS/QMI)…"
 detect_cell_iface() {
