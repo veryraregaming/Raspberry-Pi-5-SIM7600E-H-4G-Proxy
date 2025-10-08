@@ -1,3 +1,4 @@
+how do i fix perm issue
 # 4G Proxy Revival Guide
 
 ## Problem
