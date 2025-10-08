@@ -321,21 +321,23 @@ def create_ppp_config(apn: str, at_port: str):
     run_cmd(["sudo", "mkdir", "-p", "/etc/chatscripts"], check=False)
     run_cmd(["sudo", "mkdir", "-p", "/etc/ppp/peers"], check=False)
 
-    chat_script = f"""ABORT 'BUSY'
-ABORT 'NO CARRIER'
-ABORT 'ERROR'
-ABORT 'NO DIALTONE'
-ABORT 'NO ANSWER'
-REPORT CONNECT
-TIMEOUT 60
-'' AT
-OK ATZ
-OK AT+CPIN?
-OK AT+CFUN=1
-OK AT+CGATT=1
-OK AT+CGDCONT=1,"IP","{apn}"
-OK ATD*99#
-CONNECT ''
+    chat_script = f"""ABORT   BUSY
+ABORT   VOICE
+ABORT   "NO CARRIER"
+ABORT   "NO DIALTONE"
+ABORT   "NO DIAL TONE"
+ABORT   "NO ANSWER"
+ABORT   "DELAYED"
+ABORT   "ERROR"
+ABORT   "+CGATT: 0"
+""  AT
+TIMEOUT 12
+OK  ATH
+OK  ATE1
+OK  AT+CGDCONT=1,"IP","{apn}","",0,0
+OK  ATD*99#
+TIMEOUT 22
+CONNECT ""
 """
     (BASE / "ee-chat.tmp").write_text(chat_script, encoding="utf-8")
     run_cmd(["sudo", "cp", str(BASE / "ee-chat.tmp"), chat_file], check=False)
@@ -353,27 +355,14 @@ eesecure        *       secure                  *
 
     peer_config = f"""{at_port}
 115200
-crtscts
-lock
-noauth
-name "eesecure"
+noipdefault
+usepeerdns
 defaultroute
 persist
-hide-password
-ipcp-accept-local
-ipcp-accept-remote
-noipv6
-noipdefault
-noip
-lcp-echo-interval 10
-lcp-echo-failure 6
-noccp
-novj
-novjccomp
-nobsdcomp
-nodeflate
-nopcomp
-noaccomp
+noauth
+nocrtscts
+local
+name "eesecure"
 debug
 logfile {log_file}
 connect "{CHAT_PATH} -v -f {chat_file}"
