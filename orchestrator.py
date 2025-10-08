@@ -1091,10 +1091,11 @@ def set_auto_rotation_enabled(enabled):
 
 @app.get('/status')
 def status():
-    pdp = at('AT+CGPADDR')
-    pub = get_current_ip()
-
-    # Detect which connection mode is active
+    # Fast status check - avoid slow operations that cause timeouts
+    pdp = "N/A"  # Skip slow AT command
+    pub = "Checking..."  # Skip slow IP check for now
+    
+    # Detect which connection mode is active (fast check)
     connection_mode = "Unknown"
     interface_name = "Unknown"
     up = False
@@ -1124,14 +1125,10 @@ def status():
     except Exception:
         pass
 
-    # Get IMEI information
-    current_imei = get_current_imei()
-    original_imei = get_original_imei()
-    
-    # Check if IMEI has been spoofed
+    # Skip slow IMEI checks for now
+    current_imei = "N/A"
+    original_imei = "N/A"
     imei_spoofed = False
-    if original_imei and current_imei != "Unknown" and original_imei != current_imei:
-        imei_spoofed = True
 
     return jsonify({
         'pdp': pdp,
@@ -1142,7 +1139,7 @@ def status():
         'connected': up,
         'imei': {
             'current': current_imei,
-            'original': original_imei or "Not recorded",
+            'original': original_imei,
             'spoofed': imei_spoofed
         }
     })
@@ -1484,6 +1481,28 @@ def rotate():
     finally:
         in_progress = False
         rotate_lock.release()
+
+@app.get('/status/detailed')
+def status_detailed():
+    """Detailed status endpoint with slow operations (for when needed)."""
+    pdp = at('AT+CGPADDR')
+    pub = get_current_ip()
+    current_imei = get_current_imei()
+    original_imei = get_original_imei()
+    
+    imei_spoofed = False
+    if original_imei and current_imei != "Unknown" and original_imei != current_imei:
+        imei_spoofed = True
+
+    return jsonify({
+        'pdp': pdp,
+        'public_ip': pub,
+        'imei': {
+            'current': current_imei,
+            'original': original_imei or "Not recorded",
+            'spoofed': imei_spoofed
+        }
+    })
 
 @app.post('/notify')
 def notify():
