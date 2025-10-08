@@ -722,7 +722,7 @@ def detect_rndis_interface():
         pass
     return None, False
 
-def deep_reset_rndis_modem(randomise_imei_enabled=False):
+def deep_reset_rndis_modem(randomise_imei_enabled=False, wait_seconds=60):
     """Deep reset modem radio to force new PDP context and better IP variety."""
     print("🔄 Performing deep modem reset (radio + PDP context)...")
     try:
@@ -768,8 +768,8 @@ def deep_reset_rndis_modem(randomise_imei_enabled=False):
             ser.read_all()
 
             # Wait in airplane mode (this is key for CGNAT release)
-            print("  ⏱️ Extended wait in flight mode (60s for CGNAT release)...")
-            time.sleep(60)
+            print(f"  ⏱️ Wait in flight mode ({wait_seconds}s for CGNAT release)...")
+            time.sleep(wait_seconds)
 
             # Radio on
             print("  📡 Radio on...")
@@ -801,7 +801,7 @@ def deep_reset_rndis_modem(randomise_imei_enabled=False):
         print(f"  ⚠️ Deep modem reset failed: {e}")
         return False
 
-def teardown_rndis(wait_s: int, deep_reset: bool = False, randomise_imei_enabled: bool = False):
+def teardown_rndis(wait_s: int, deep_reset: bool = False, randomise_imei_enabled: bool = False, deep_reset_wait: int = 60):
     """Teardown RNDIS interface by bringing it down."""
     iface, _ = detect_rndis_interface()
     if iface:
@@ -811,7 +811,7 @@ def teardown_rndis(wait_s: int, deep_reset: bool = False, randomise_imei_enabled
 
         if deep_reset:
             # Perform deep modem reset for better IP variety
-            deep_reset_rndis_modem(randomise_imei_enabled=randomise_imei_enabled)
+            deep_reset_rndis_modem(randomise_imei_enabled=randomise_imei_enabled, wait_seconds=deep_reset_wait)
             print(f"Waiting {wait_s} seconds after deep reset...")
         else:
             print(f"Waiting {wait_s} seconds for RNDIS teardown...")
@@ -1003,6 +1003,7 @@ def auto_rotation_worker():
                             restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
                             max_attempts  = int(rotation_config.get('max_attempts', 2))
                             randomise_imei_enabled = rotation_config.get('randomise_imei', False)
+                            deep_reset_wait = int(rotation_config.get('deep_reset_wait', 60))
 
                             for attempt in range(max_attempts):
                                 print(f"Auto-rotation: RNDIS Rotation Attempt {attempt + 1}/{max_attempts}")
@@ -1011,7 +1012,7 @@ def auto_rotation_worker():
                                 use_deep_reset = True
                                 print(f"Auto-rotation: Using deep reset for better IP variety")
 
-                                teardown_rndis(teardown_wait, deep_reset=use_deep_reset, randomise_imei_enabled=randomise_imei_enabled)
+                                teardown_rndis(teardown_wait, deep_reset=use_deep_reset, randomise_imei_enabled=randomise_imei_enabled, deep_reset_wait=deep_reset_wait)
 
                                 try:
                                     start_rndis()
@@ -1055,7 +1056,59 @@ def auto_rotation_worker():
                                     update_ip_history(new_ip, force_add=True, is_failure=True)
                                     send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
                         else:
-                            print("Auto-rotation: No RNDIS interface found, skipping rotation")
+                            print("Auto-rotation: No QMI/RNDIS interfaces found, trying PPP fallback...")
+                            # PPP fallback logic (similar to manual rotation)
+                            rotation_config = config.get('rotation', {}) or {}
+                            teardown_wait = int(rotation_config.get('ppp_teardown_wait', 30))
+                            restart_wait = int(rotation_config.get('ppp_restart_wait', 60))
+                            max_attempts = int(rotation_config.get('max_attempts', 2))
+
+                            for attempt in range(max_attempts):
+                                print(f"Auto-rotation: PPP Rotation Attempt {attempt + 1}/{max_attempts}")
+                                
+                                teardown_ppp(teardown_wait)
+                                
+                                try:
+                                    start_ppp()
+                                except Exception as e:
+                                    print(f"Auto-rotation: PPP restart failed on attempt {attempt + 1}: {e}")
+                                    if attempt == max_attempts - 1:
+                                        err = f"PPP restart failed after {max_attempts} attempts"
+                                        print(f"Auto-rotation failed: {err}")
+                                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                                        break
+                                    continue
+
+                                if not wait_for_ppp_up(restart_wait):
+                                    print(f"Auto-rotation: PPP interface did not come up within {restart_wait} seconds")
+                                    if attempt == max_attempts - 1:
+                                        err = f"PPP interface failed to get IP after {max_attempts} attempts"
+                                        print(f"Auto-rotation failed: {err}")
+                                        send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
+                                        break
+                                    continue
+
+                                # Check if IP changed
+                                time.sleep(5)  # Give it a moment to stabilize
+                                new_ip = get_current_ip()
+
+                                # Update IP history regardless of success/failure
+                                if new_ip != "Unknown":
+                                    update_ip_history(new_ip)
+
+                                if new_ip != previous_ip and new_ip != "Unknown":
+                                    print(f"✅ Auto-rotation successful: {previous_ip} -> {new_ip}")
+                                    send_discord_notification(new_ip, previous_ip, is_rotation=True)
+                                    break
+                                else:
+                                    print(f"Auto-rotation: IP unchanged on attempt {attempt + 1}: {new_ip} (was {previous_ip})")
+                                    if attempt < max_attempts - 1:
+                                        continue
+                                    err = f"IP did not change after {max_attempts} attempts"
+                                    print(f"Auto-rotation failed: {err}")
+                                    # Force add to history even though IP is same (to show failed rotation attempt)
+                                    update_ip_history(new_ip, force_add=True, is_failure=True)
+                                    send_discord_notification(current_ip, previous_ip, is_rotation=False, is_failure=True, error_message=err)
 
                     except Exception as e:
                         err = f"Auto-rotation failed: {str(e)}"
@@ -1079,9 +1132,11 @@ def start_auto_rotation():
 
     if auto_rotation_thread is None or not auto_rotation_thread.is_alive():
         auto_rotation_stop_event.clear()
-        auto_rotation_thread = threading.Thread(target=auto_rotation_worker, daemon=True)
+        auto_rotation_thread = threading.Thread(target=auto_rotation_worker, daemon=False)
         auto_rotation_thread.start()
         print("✅ Auto-rotation thread started")
+        print(f"   Thread ID: {auto_rotation_thread.ident}")
+        print(f"   Thread alive: {auto_rotation_thread.is_alive()}")
 
 def stop_auto_rotation():
     """Stop the auto-rotation background thread."""
@@ -1290,8 +1345,9 @@ def rotate():
             restart_wait  = int(rotation_config.get('ppp_restart_wait', 60))
             max_attempts  = int(rotation_config.get('max_attempts', 2))
             randomise_imei_enabled = rotation_config.get('randomise_imei', False)
+            deep_reset_wait = int(rotation_config.get('deep_reset_wait', 60))
 
-            print(f"RNDIS rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, max_attempts={max_attempts}, randomise_imei={'enabled' if randomise_imei_enabled else 'disabled'}")
+            print(f"RNDIS rotation config: teardown_wait={teardown_wait}s, restart_wait={restart_wait}s, max_attempts={max_attempts}, deep_reset_wait={deep_reset_wait}s, randomise_imei={'enabled' if randomise_imei_enabled else 'disabled'}")
 
             for attempt in range(max_attempts):
                 print(f"\n--- RNDIS Rotation Attempt {attempt + 1}/{max_attempts} ---")
@@ -1300,7 +1356,7 @@ def rotate():
                 use_deep_reset = True
                 print(f"Using deep reset for better IP variety (sticky CGNAT workaround)")
 
-                teardown_rndis(teardown_wait, deep_reset=use_deep_reset, randomise_imei_enabled=randomise_imei_enabled)
+                teardown_rndis(teardown_wait, deep_reset=use_deep_reset, randomise_imei_enabled=randomise_imei_enabled, deep_reset_wait=deep_reset_wait)
 
                 try:
                     start_rndis()
