@@ -221,9 +221,15 @@ if [[ -n "${LAN_IP:-}" ]]; then
   echo "   -> Detected LAN: ${LAN_CIDR}"
 fi
 
-$IPTABLES -C INPUT -p tcp -s "$LAN_CIDR" --dport 22   -j ACCEPT 2>/dev/null || $IPTABLES -A INPUT -p tcp -s "$LAN_CIDR" --dport 22   -j ACCEPT
-$IPTABLES -C INPUT -p tcp -s "$LAN_CIDR" --dport 3128 -j ACCEPT 2>/dev/null || $IPTABLES -A INPUT -p tcp -s "$LAN_CIDR" --dport 3128 -j ACCEPT
-$IPTABLES -C INPUT -p tcp -s "$LAN_CIDR" --dport 5000 -j ACCEPT 2>/dev/null || $IPTABLES -A INPUT -p tcp -s "$LAN_CIDR" --dport 5000 -j ACCEPT
+# Add firewall rules in correct order (more specific first)
+$IPTABLES -I INPUT -p tcp -s "$LAN_CIDR" --dport 22   -j ACCEPT
+$IPTABLES -I INPUT -p tcp -s "$LAN_CIDR" --dport 3128 -j ACCEPT
+$IPTABLES -I INPUT -p tcp -s "$LAN_CIDR" --dport 5000 -j ACCEPT
+
+# Add general rules for other networks (less specific)
+$IPTABLES -I INPUT -p tcp -s 192.168.0.0/16 --dport 22   -j ACCEPT
+$IPTABLES -I INPUT -p tcp -s 192.168.0.0/16 --dport 3128 -j ACCEPT
+$IPTABLES -I INPUT -p tcp -s 192.168.0.0/16 --dport 5000 -j ACCEPT
 
 netfilter-persistent save >/dev/null 2>&1 || true
 
