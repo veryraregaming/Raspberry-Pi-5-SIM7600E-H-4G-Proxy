@@ -629,17 +629,20 @@ def activate_modem_via_ppp(apn: str):
     create_ppp_config(apn, at_port)
 
     print("  🚀 Starting PPP session (pppd call ee)…")
-    out, err, rc = run_cmd(["sudo", PPPD_PATH, "call", "ee"], check=False, timeout=60)
+    out, err, rc = run_cmd(["sudo", PPPD_PATH, "call", "ee"], check=False, timeout=150)  # Increased from 60 to 150 seconds
     if rc != 0 and err:
         print(f"  ⚠️ pppd error: {err}")
 
     print("  ⏳ Waiting for ppp0 IPv4…")
-    for _ in range(60):
+    for i in range(120):  # Increased from 60 to 120 seconds
         time.sleep(1)
         out, _, _ = run_cmd([IP_PATH, "-4", "addr", "show", "ppp0"], check=False)
         if "inet " in out:
             print("  ✅ ppp0 is UP with IPv4")
             return True
+        # Show progress every 10 seconds
+        if (i + 1) % 10 == 0:
+            print(f"  ⏳ Still waiting... ({i + 1}s)")
 
     print("  ❌ ppp0 did not come up in time.")
     return False
