@@ -122,40 +122,85 @@ detect_cell_iface() {
     echo "ppp0"; return 0
   fi
   # Prefer active IPv4 interfaces that look like modem USB/QMI/RNDIS
-  $IP -o -4 addr show | awk '{print $2}' | grep -E '^(enx|usb0|wwan[0-9]+|eth1|eth2|eth3)' | head -n1 || true
+  $IP -o -4 addr show | awk '{print $2}' | grep -E '^(wwan|enx|usb0|eth1|eth2|eth3)' | head -n1 || true
 }
+
+# Detect gateway for interface
+detect_gateway() {
+  local iface="$1"
+  
+  # Try from main routing table first
+  local gw="$($IP route show dev "${iface}" | awk '/^default/ {print $3}' | head -n1)"
+  if [[ -n "${gw}" ]]; then
+    echo "${gw}"
+    return 0
+  fi
+  
+  # Try from all routes
+  gw="$($IP route | awk "/^default.*${iface}/ {print \$3}" | head -n1)"
+  if [[ -n "${gw}" ]]; then
+    echo "${gw}"
+    return 0
+  fi
+  
+  # For RNDIS interfaces, try standard gateways
+  if [[ "${iface}" == enx* ]] || [[ "${iface}" == eth1 ]]; then
+    # Test 192.168.225.1 (common RNDIS gateway)
+    if ping -I "${iface}" -c 1 -W 2 192.168.225.1 >/dev/null 2>&1; then
+      echo "192.168.225.1"
+      return 0
+    fi
+  fi
+  
+  # For QMI/wwan, gateway is usually the first hop
+  if [[ "${iface}" == wwan* ]]; then
+    # Check if we can reach 8.8.8.8 directly (some modems don't need explicit gateway)
+    if ping -I "${iface}" -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
+      # Interface can route directly, no specific gateway needed
+      echo "direct"
+      return 0
+    fi
+  fi
+  
+  return 1
+}
+
 CELL_IFACE="$(detect_cell_iface || true)"
 if [[ -z "${CELL_IFACE:-}" ]]; then
   echo "⚠️  No cellular iface with IPv4 yet (PPP/RNDIS/QMI). Leaving LAN-only; run again after modem is up."
 else
   echo "   -> cellular iface: ${CELL_IFACE}"
-  $IP link set dev "${CELL_IFACE}" up || true
   
-  # Ensure cellular interface is properly up and connected
-  echo "   -> Ensuring cellular interface is connected..."
-  sleep 2
-  $IP link set dev "${CELL_IFACE}" up || true
-  
-  # Test if cellular interface can reach internet, if not try to establish connection
-  if ! ping -I "${CELL_IFACE}" -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
-    echo "   -> Cellular interface not connected, attempting to establish connection..."
-    # Try dhclient to get proper IP configuration
-    $DHCLIENT -v "${CELL_IFACE}" 2>/dev/null || true
-    sleep 3
-    # Bring interface up again after dhclient
-    $IP link set dev "${CELL_IFACE}" up || true
-  fi
-  
-  # Ensure cellular interface stays up and has internet connectivity
-  echo "   -> Ensuring cellular interface maintains connection..."
+  # Ensure cellular interface is UP
+  echo "   -> Bringing ${CELL_IFACE} UP..."
   $IP link set dev "${CELL_IFACE}" up || true
   sleep 2
-  # Test connectivity again and retry if needed
-  if ! ping -I "${CELL_IFACE}" -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
-    echo "   -> Retrying cellular connection..."
-    $DHCLIENT -v "${CELL_IFACE}" 2>/dev/null || true
-    sleep 2
-    $IP link set dev "${CELL_IFACE}" up || true
+  
+  # For RNDIS/QMI interfaces, ensure DHCP is configured
+  if [[ "${CELL_IFACE}" != "ppp0" ]]; then
+    if ! $IP -4 addr show "${CELL_IFACE}" | grep -q "inet "; then
+      echo "   -> No IP on ${CELL_IFACE}, requesting DHCP..."
+      
+      # Try udhcpc first (lighter), then dhclient
+      if command -v udhcpc >/dev/null 2>&1; then
+        udhcpc -i "${CELL_IFACE}" -q -n 2>/dev/null || {
+          echo "   -> udhcpc failed, trying dhclient..."
+          dhclient -v "${CELL_IFACE}" 2>/dev/null || true
+        }
+      else
+        dhclient -v "${CELL_IFACE}" 2>/dev/null || true
+      fi
+      sleep 3
+      $IP link set dev "${CELL_IFACE}" up || true
+    fi
+    
+    # Test connectivity
+    echo "   -> Testing ${CELL_IFACE} connectivity..."
+    if ping -I "${CELL_IFACE}" -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
+      echo "   ✅ ${CELL_IFACE} has internet connectivity"
+    else
+      echo "   ⚠️  ${CELL_IFACE} connectivity test failed, may need manual troubleshooting"
+    fi
   fi
   
   # CRITICAL: Ensure WiFi remains the default route (not cellular)
@@ -172,43 +217,57 @@ else
   grep -qE "^[[:space:]]*100[[:space:]]+cellular$" "${RT_TABLES}" 2>/dev/null || echo "100 cellular" >> "${RT_TABLES}"
 
   # Write default route in cellular table with proper gateway
+  echo "   -> Configuring cellular routing table..."
   if [[ "${CELL_IFACE}" == "ppp0" ]]; then
     PPP_GW="$($IP -4 addr show ppp0 | awk '/peer/ {print $4}' | cut -d/ -f1)"
     if [[ -n "${PPP_GW}" && "${PPP_GW}" != "link" ]]; then
       $IP route replace default via "${PPP_GW}" dev ppp0 table cellular
+      echo "   -> Cellular table: default via ${PPP_GW} dev ppp0"
     else
       $IP route replace default dev ppp0 table cellular
+      echo "   -> Cellular table: default dev ppp0"
     fi
   else
-    # For RNDIS/QMI interfaces, get the gateway from the interface's route
-    CELL_GW="$($IP route show dev "${CELL_IFACE}" | awk '/default/ {print $3}' | head -n1)"
-    if [[ -n "${CELL_GW}" ]]; then
-      $IP route replace default via "${CELL_GW}" dev "${CELL_IFACE}" table cellular
+    # Detect gateway dynamically
+    if CELL_GW="$(detect_gateway "${CELL_IFACE}")"; then
+      if [[ "${CELL_GW}" == "direct" ]]; then
+        # No explicit gateway needed, interface routes directly
+        $IP route replace default dev "${CELL_IFACE}" table cellular
+        echo "   -> Cellular table: default dev ${CELL_IFACE} (direct routing)"
+      else
+        $IP route replace default via "${CELL_GW}" dev "${CELL_IFACE}" table cellular
+        echo "   ✅ Cellular table: default via ${CELL_GW} dev ${CELL_IFACE}"
+      fi
     else
-      # Fallback: use the standard RNDIS gateway
-      $IP route replace default via 192.168.225.1 dev "${CELL_IFACE}" table cellular
+      echo "   ⚠️  Could not detect gateway for ${CELL_IFACE}, using direct routing"
+      $IP route replace default dev "${CELL_IFACE}" table cellular
     fi
-    echo "   -> Cellular table: default via ${CELL_GW:-192.168.225.1} dev ${CELL_IFACE}"
+  fi
+
+  # Verify cellular table has routes
+  if ! $IP route show table cellular | grep -q "default"; then
+    echo "   ⚠️  WARNING: Cellular table has no default route!"
   fi
 
   # Single policy rule for marked traffic
-  $IP rule add fwmark 0x1 table cellular pref 100 2>/dev/null || true
+  $IP rule del fwmark 0x1 table cellular 2>/dev/null || true
+  $IP rule add fwmark 0x1 table cellular pref 100
 
   # Mark ONLY Squid processes (both UID and GID; cover 'proxy' & 'squid')
   for U in proxy squid; do
     if id -u "$U" >/dev/null 2>&1; then
-      $IPTABLES -t mangle -C OUTPUT -m owner --uid-owner "$U" -j MARK --set-mark 1 2>/dev/null || \
-        $IPTABLES -t mangle -A OUTPUT -m owner --uid-owner "$U" -j MARK --set-mark 1
-      $IPTABLES -t mangle -C OUTPUT -m owner --gid-owner "$U" -j MARK --set-mark 1 2>/dev/null || \
-        $IPTABLES -t mangle -A OUTPUT -m owner --gid-owner "$U" -j MARK --set-mark 1
+      $IPTABLES -t mangle -D OUTPUT -m owner --uid-owner "$U" -j MARK --set-mark 1 2>/dev/null || true
+      $IPTABLES -t mangle -A OUTPUT -m owner --uid-owner "$U" -j MARK --set-mark 1
+      $IPTABLES -t mangle -D OUTPUT -m owner --gid-owner "$U" -j MARK --set-mark 1 2>/dev/null || true
+      $IPTABLES -t mangle -A OUTPUT -m owner --gid-owner "$U" -j MARK --set-mark 1
     fi
   done
 
-  # NAT when leaving the cellular iface (good hygiene if helpers/ICMP go out)
-  $IPTABLES -t nat -C POSTROUTING -o "${CELL_IFACE}" -j MASQUERADE 2>/dev/null || \
-    $IPTABLES -t nat -A POSTROUTING -o "${CELL_IFACE}" -j MASQUERADE
+  # NAT when leaving the cellular iface
+  $IPTABLES -t nat -D POSTROUTING -o "${CELL_IFACE}" -j MASQUERADE 2>/dev/null || true
+  $IPTABLES -t nat -A POSTROUTING -o "${CELL_IFACE}" -j MASQUERADE
 
-  # Remove any lingering duplicate policy table
+  # Remove any lingering duplicate policy tables
   $IP rule del fwmark 0x1 table rndis 2>/dev/null || true
   $IP route flush table rndis 2>/dev/null || true
 fi
@@ -271,24 +330,37 @@ UNIT
 systemctl daemon-reload
 systemctl enable raspi-4g-proxy.service >/dev/null
 
-# Create a service to keep cellular interface up
-echo "==> Creating cellular interface keepalive service…"
-cat >/etc/systemd/system/cellular-keepalive.service <<KEEPALIVE
+# Install cellular keepalive service
+echo "==> Installing cellular interface keepalive service…"
+if [[ -f "${SCRIPT_DIR}/cellular-keepalive.sh" ]]; then
+  cp "${SCRIPT_DIR}/cellular-keepalive.sh" /usr/local/bin/cellular-keepalive
+  chmod +x /usr/local/bin/cellular-keepalive
+  
+  cat >/etc/systemd/system/cellular-keepalive.service <<'KEEPALIVE'
 [Unit]
-Description=Keep cellular interface up and connected
+Description=Cellular Interface Keepalive Monitor
 After=network.target
+Wants=network.target
 
 [Service]
-Type=oneshot
-ExecStart=/bin/bash -c 'ip link set ${CELL_IFACE} up && dhclient ${CELL_IFACE}'
-RemainAfterExit=yes
+Type=simple
+ExecStart=/usr/local/bin/cellular-keepalive
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 KEEPALIVE
 
-systemctl daemon-reload
-systemctl enable cellular-keepalive.service >/dev/null
+  systemctl daemon-reload
+  systemctl enable cellular-keepalive.service >/dev/null
+  systemctl restart cellular-keepalive.service >/dev/null || true
+  echo "   ✅ Cellular keepalive service installed and started"
+else
+  echo "   ⚠️  cellular-keepalive.sh not found, skipping keepalive service"
+fi
 
 echo
 echo "==> Health:"

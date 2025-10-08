@@ -370,7 +370,30 @@ HTML_TEMPLATE = """
             const response = await fetch('/api/status');
             const data = await response.json();
             
-            document.getElementById('current-ip').textContent = data.public_ip || 'Unknown';
+            // Display IP with error/warning styling
+            const ipElement = document.getElementById('current-ip');
+            const ip = data.public_ip || 'Unknown';
+            ipElement.textContent = ip;
+            
+            // Style IP based on status
+            if (ip.includes('⚠️') || ip.includes('WiFi IP') || ip.includes('LAN IP') || ip.includes('broken')) {
+                ipElement.style.backgroundColor = '#fff3cd';
+                ipElement.style.color = '#856404';
+                ipElement.style.fontWeight = 'bold';
+            } else if (ip === 'No cellular connection' || ip.includes('Error:') || ip.includes('timeout')) {
+                ipElement.style.backgroundColor = '#f8d7da';
+                ipElement.style.color = '#721c24';
+                ipElement.style.fontWeight = 'bold';
+            } else if (ip === 'Rotating...') {
+                ipElement.style.backgroundColor = '#d1ecf1';
+                ipElement.style.color = '#0c5460';
+                ipElement.style.fontWeight = 'bold';
+            } else {
+                ipElement.style.backgroundColor = '#f0f2ff';
+                ipElement.style.color = '#667eea';
+                ipElement.style.fontWeight = 'bold';
+            }
+            
             document.getElementById('connection-status').textContent = data.connected ? 'Connected' : 'Disconnected';
             document.getElementById('connection-status').className = 'status ' + (data.connected ? 'success' : 'error');
             document.getElementById('connection-mode').textContent = data.connection_mode || 'Unknown';

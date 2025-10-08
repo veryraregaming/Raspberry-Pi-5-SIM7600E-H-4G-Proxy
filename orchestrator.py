@@ -237,9 +237,9 @@ def get_current_ip():
                                    capture_output=True, text=True, timeout=3)
                 if r.returncode != 0 or "inet " not in r.stdout:
                     # No cellular interface is up
-                    return "Unknown"
+                    return "No cellular connection"
             except Exception:
-                return "Unknown"
+                return "No cellular connection"
 
     # Cellular interface is up, check public IP via proxy
     try:
@@ -251,22 +251,34 @@ def get_current_ip():
             'http': f'http://{lan_ip}:3128',
             'https': f'http://{lan_ip}:3128'
         }
-        r = requests.get('https://api.ipify.org', proxies=proxies, timeout=10)
+        r = requests.get('https://api.ipify.org', proxies=proxies, timeout=8)
         ip = r.text.strip()
 
-        # Verify this is a public IP (not private/home network)
+        # Check if this looks like a valid public IP
+        if not ip or len(ip) < 7:
+            return "Unknown - proxy failed"
+        
+        # If we get a private IP, it means proxy is routing through WiFi/LAN
+        # This indicates the cellular routing is broken
         if (
             ip.startswith('192.168.')
             or ip.startswith('10.')
             or ip.startswith('172.')
-            or ip.startswith('86.151.')
         ):
-            return "Unknown"
+            # Check if it's the user's home IP (EE hub)
+            if ip.startswith('86.151.'):
+                return f"⚠️ WiFi IP: {ip} (cellular routing broken!)"
+            return f"⚠️ LAN IP: {ip} (cellular routing broken!)"
 
+        # Valid cellular IP
         return ip
-    except Exception:
-        # If proxy fails, return Unknown (don't fallback to WiFi)
-        return "Unknown"
+        
+    except requests.exceptions.Timeout:
+        return "Proxy timeout (check cellular connection)"
+    except requests.exceptions.ConnectionError:
+        return "Proxy not responding (check Squid)"
+    except Exception as e:
+        return f"Error: {str(e)[:50]}"
 
 # ========= Discord =========
 
@@ -1091,11 +1103,10 @@ def set_auto_rotation_enabled(enabled):
 
 @app.get('/status')
 def status():
-    # Fast status check - avoid slow operations that cause timeouts
+    # Fast status check with actual IP detection
     pdp = "N/A"  # Skip slow AT command
-    pub = "Checking..."  # Skip slow IP check for now
     
-    # Detect which connection mode is active (fast check)
+    # Detect which connection mode is active
     connection_mode = "Unknown"
     interface_name = "Unknown"
     up = False
@@ -1125,7 +1136,13 @@ def status():
     except Exception:
         pass
 
-    # Skip slow IMEI checks for now
+    # Get public IP (with timeout to avoid hanging)
+    try:
+        pub = get_current_ip()
+    except Exception as e:
+        pub = f"Error: {str(e)[:30]}"
+
+    # Skip slow IMEI checks for fast status
     current_imei = "N/A"
     original_imei = "N/A"
     imei_spoofed = False
