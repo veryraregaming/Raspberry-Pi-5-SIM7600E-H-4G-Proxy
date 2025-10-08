@@ -358,7 +358,6 @@ lock
 noauth
 name "eesecure"
 defaultroute
-usepeerdns
 persist
 hide-password
 ipcp-accept-local
@@ -366,6 +365,7 @@ ipcp-accept-remote
 noipv6
 noipdefault
 noip
+nodns
 lcp-echo-interval 10
 lcp-echo-failure 6
 noccp
