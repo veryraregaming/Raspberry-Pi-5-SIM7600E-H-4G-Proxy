@@ -363,6 +363,8 @@ persist
 hide-password
 ipcp-accept-local
 ipcp-accept-remote
+noipv6
+noipdefault
 lcp-echo-interval 10
 lcp-echo-failure 6
 noccp
