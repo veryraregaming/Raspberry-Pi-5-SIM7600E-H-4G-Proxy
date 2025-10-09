@@ -743,56 +743,62 @@ def deep_reset_rndis_modem(randomise_imei_enabled=False, wait_seconds=60):
             return False
 
         with serial.Serial(at_port, 115200, timeout=5) as ser:
-            # Deactivate PDP context
-            print("  📡 Deactivating PDP context...")
-            ser.write(b"AT+CGACT=0,1\r\n")
-            time.sleep(2)
-            ser.read_all()  # Clear buffer
-
-            # Detach from network
-            print("  📡 Detaching from network...")
-            ser.write(b"AT+CGATT=0\r\n")
-            time.sleep(2)
-            ser.read_all()
-            
-            # Deregister from network completely (like airplane mode)
-            print("  ✈️ Deregistering from network (airplane mode)...")
-            ser.write(b"AT+COPS=2\r\n")  # Deregister
+            # Step 1: Force disconnect from all contexts
+            print("  📡 Force deactivating all PDP contexts...")
+            ser.write(b"AT+CGACT=0\r\n")  # Deactivate all contexts
             time.sleep(3)
             ser.read_all()
 
-            # Radio off (flight mode)
-            print("  📴 Radio off (flight mode)...")
-            ser.write(b"AT+CFUN=4\r\n")  # Airplane mode
-            time.sleep(5)
-            ser.read_all()
-
-            # Wait in airplane mode (this is key for CGNAT release)
-            print(f"  ⏱️ Wait in flight mode ({wait_seconds}s for CGNAT release)...")
-            time.sleep(wait_seconds)
-
-            # Radio on
-            print("  📡 Radio on...")
-            ser.write(b"AT+CFUN=1\r\n")
-            time.sleep(8)
+            # Step 2: Detach from network
+            print("  📡 Detaching from network...")
+            ser.write(b"AT+CGATT=0\r\n")
+            time.sleep(3)
             ser.read_all()
             
-            # Auto-register to network
-            print("  📡 Auto-registering to network...")
-            ser.write(b"AT+COPS=0\r\n")  # Auto register
+            # Step 3: Deregister from network completely
+            print("  ✈️ Deregistering from network...")
+            ser.write(b"AT+COPS=2\r\n")  # Deregister
             time.sleep(5)
             ser.read_all()
 
-            # Reattach to network
-            print("  📡 Reattaching to network...")
-            ser.write(b"AT+CGATT=1\r\n")
-            time.sleep(2)
+            # Step 4: Full radio reset (SIM7600E-H specific)
+            print("  📴 Full radio reset (SIM7600E-H)...")
+            ser.write(b"AT+CFUN=0\r\n")  # Radio off completely
+            time.sleep(5)
+            ser.read_all()
+            
+            # Step 5: Extended airplane mode for CGNAT release
+            print("  ✈️ Extended airplane mode...")
+            ser.write(b"AT+CFUN=4\r\n")  # Airplane mode
+            time.sleep(3)
             ser.read_all()
 
-            # Reactivate PDP context
+            # Step 6: Wait in airplane mode (critical for EE CGNAT)
+            print(f"  ⏱️ Extended wait in airplane mode ({wait_seconds}s for CGNAT release)...")
+            time.sleep(wait_seconds)
+
+            # Step 7: Full radio restart
+            print("  📡 Full radio restart...")
+            ser.write(b"AT+CFUN=1,1\r\n")  # Full function mode + reset
+            time.sleep(10)
+            ser.read_all()
+            
+            # Step 8: Auto-register to network
+            print("  📡 Auto-registering to network...")
+            ser.write(b"AT+COPS=0\r\n")  # Auto register
+            time.sleep(8)
+            ser.read_all()
+
+            # Step 9: Reattach to network
+            print("  📡 Reattaching to network...")
+            ser.write(b"AT+CGATT=1\r\n")
+            time.sleep(5)
+            ser.read_all()
+
+            # Step 10: Reactivate PDP context
             print("  📡 Reactivating PDP context...")
             ser.write(b"AT+CGACT=1,1\r\n")
-            time.sleep(2)
+            time.sleep(5)
             ser.read_all()
 
         print("  ✅ Deep modem reset complete")
