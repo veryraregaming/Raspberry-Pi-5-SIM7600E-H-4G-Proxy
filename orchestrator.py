@@ -722,83 +722,133 @@ def detect_rndis_interface():
         pass
     return None, False
 
-def deep_reset_rndis_modem(randomise_imei_enabled=False, wait_seconds=60):
-    """Deep reset modem radio to force new PDP context and better IP variety."""
-    print("🔄 Performing deep modem reset (radio + PDP context)...")
+def smart_ip_rotation_rndis_modem(randomise_imei_enabled=False, wait_seconds=30):
+    """Smart IP rotation using network mode switching and APN cycling - much faster than full reset."""
+    print("🔄 Performing smart IP rotation (network mode + APN cycling)...")
     try:
         # Randomise IMEI first if enabled (before any other operations)
         if randomise_imei_enabled:
             print("📱 Step 1: Randomising IMEI...")
             if randomise_imei():
                 print("  ✅ IMEI changed successfully, modem already rebooted")
-                # Wait a bit more for modem to stabilise after reboot
-                print("  ⏱️ Waiting 15 seconds for modem to stabilise...")
                 time.sleep(15)
             else:
-                print("  ⚠️ IMEI change failed, continuing with standard reset...")
+                print("  ⚠️ IMEI change failed, continuing with smart rotation...")
         
+        at_port = detect_modem_port()
+        if not at_port or not os.path.exists(at_port):
+            print(f"⚠️ Smart rotation skipped: AT port {at_port} not available")
+            return False
+
+        with serial.Serial(at_port, 115200, timeout=5) as ser:
+            # Step 1: Deactivate PDP context (gentle disconnect)
+            print("  📡 Deactivating PDP context...")
+            ser.write(b"AT+CGACT=0,1\r\n")
+            time.sleep(2)
+            ser.read_all()
+
+            # Step 2: Switch network mode (4G -> 3G -> 4G for new IP)
+            print("  📡 Switching to 3G mode...")
+            ser.write(b"AT+CNMP=14\r\n")  # 3G only
+            time.sleep(3)
+            ser.read_all()
+
+            # Step 3: Wait for network to register on 3G
+            print("  ⏱️ Waiting for 3G registration...")
+            time.sleep(5)
+            
+            # Step 4: Switch back to 4G mode
+            print("  📡 Switching back to 4G mode...")
+            ser.write(b"AT+CNMP=38\r\n")  # 4G only
+            time.sleep(3)
+            ser.read_all()
+
+            # Step 5: Wait for network to re-register on 4G
+            print("  ⏱️ Waiting for 4G re-registration...")
+            time.sleep(5)
+
+            # Step 6: Try APN cycling (everywhere -> eesecure -> everywhere)
+            print("  📡 Cycling APN for fresh IP...")
+            ser.write(b'AT+CGDCONT=1,"IP","eesecure"\r\n')  # Switch to eesecure
+            time.sleep(2)
+            ser.read_all()
+            
+            ser.write(b'AT+CGDCONT=1,"IP","everywhere"\r\n')  # Back to everywhere
+            time.sleep(2)
+            ser.read_all()
+
+            # Step 7: Reactivate PDP context with new settings
+            print("  📡 Reactivating PDP context...")
+            ser.write(b"AT+CGACT=1,1\r\n")
+            time.sleep(3)
+            ser.read_all()
+
+        print("  ✅ Smart IP rotation complete")
+        return True
+    except Exception as e:
+        print(f"  ⚠️ Smart rotation failed: {e}")
+        return False
+
+def deep_reset_rndis_modem(randomise_imei_enabled=False, wait_seconds=60):
+    """Fallback deep reset - only used if smart rotation fails multiple times."""
+    print("🔄 Performing deep modem reset (radio + PDP context)...")
+    try:
         at_port = detect_modem_port()
         if not at_port or not os.path.exists(at_port):
             print(f"⚠️ Deep reset skipped: AT port {at_port} not available")
             return False
 
         with serial.Serial(at_port, 115200, timeout=5) as ser:
-            # Step 1: Force disconnect from all contexts
-            print("  📡 Force deactivating all PDP contexts...")
-            ser.write(b"AT+CGACT=0\r\n")  # Deactivate all contexts
-            time.sleep(3)
+            # Deactivate PDP context
+            print("  📡 Deactivating PDP context...")
+            ser.write(b"AT+CGACT=0,1\r\n")
+            time.sleep(2)
             ser.read_all()
 
-            # Step 2: Detach from network
+            # Detach from network
             print("  📡 Detaching from network...")
             ser.write(b"AT+CGATT=0\r\n")
-            time.sleep(3)
+            time.sleep(2)
             ser.read_all()
             
-            # Step 3: Deregister from network completely
+            # Deregister from network
             print("  ✈️ Deregistering from network...")
-            ser.write(b"AT+COPS=2\r\n")  # Deregister
-            time.sleep(5)
-            ser.read_all()
-
-            # Step 4: Full radio reset (SIM7600E-H specific)
-            print("  📴 Full radio reset (SIM7600E-H)...")
-            ser.write(b"AT+CFUN=0\r\n")  # Radio off completely
-            time.sleep(5)
-            ser.read_all()
-            
-            # Step 5: Extended airplane mode for CGNAT release
-            print("  ✈️ Extended airplane mode...")
-            ser.write(b"AT+CFUN=4\r\n")  # Airplane mode
+            ser.write(b"AT+COPS=2\r\n")
             time.sleep(3)
             ser.read_all()
 
-            # Step 6: Wait in airplane mode (critical for EE CGNAT)
-            print(f"  ⏱️ Extended wait in airplane mode ({wait_seconds}s for CGNAT release)...")
+            # Airplane mode
+            print("  ✈️ Airplane mode...")
+            ser.write(b"AT+CFUN=4\r\n")
+            time.sleep(3)
+            ser.read_all()
+
+            # Wait in airplane mode
+            print(f"  ⏱️ Wait in airplane mode ({wait_seconds}s)...")
             time.sleep(wait_seconds)
 
-            # Step 7: Full radio restart
-            print("  📡 Full radio restart...")
-            ser.write(b"AT+CFUN=1,1\r\n")  # Full function mode + reset
-            time.sleep(10)
-            ser.read_all()
-            
-            # Step 8: Auto-register to network
-            print("  📡 Auto-registering to network...")
-            ser.write(b"AT+COPS=0\r\n")  # Auto register
+            # Radio back on
+            print("  📡 Radio back on...")
+            ser.write(b"AT+CFUN=1\r\n")
             time.sleep(8)
             ser.read_all()
-
-            # Step 9: Reattach to network
-            print("  📡 Reattaching to network...")
-            ser.write(b"AT+CGATT=1\r\n")
+            
+            # Auto-register
+            print("  📡 Auto-registering...")
+            ser.write(b"AT+COPS=0\r\n")
             time.sleep(5)
             ser.read_all()
 
-            # Step 10: Reactivate PDP context
-            print("  📡 Reactivating PDP context...")
+            # Reattach
+            print("  📡 Reattaching...")
+            ser.write(b"AT+CGATT=1\r\n")
+            time.sleep(2)
+            ser.read_all()
+
+            # Reactivate
+            print("  📡 Reactivating PDP...")
             ser.write(b"AT+CGACT=1,1\r\n")
-            time.sleep(5)
+            time.sleep(2)
             ser.read_all()
 
         print("  ✅ Deep modem reset complete")
@@ -816,9 +866,15 @@ def teardown_rndis(wait_s: int, deep_reset: bool = False, randomise_imei_enabled
                        check=False)
 
         if deep_reset:
-            # Perform deep modem reset for better IP variety
-            deep_reset_rndis_modem(randomise_imei_enabled=randomise_imei_enabled, wait_seconds=deep_reset_wait)
-            print(f"Waiting {wait_s} seconds after deep reset...")
+            # Try smart rotation first (faster, less disruptive)
+            print("  🔄 Trying smart IP rotation first...")
+            smart_success = smart_ip_rotation_rndis_modem(randomise_imei_enabled=randomise_imei_enabled, wait_seconds=30)
+            
+            if not smart_success:
+                print("  ⚠️ Smart rotation failed, falling back to deep reset...")
+                deep_reset_rndis_modem(randomise_imei_enabled=randomise_imei_enabled, wait_seconds=deep_reset_wait)
+            
+            print(f"Waiting {wait_s} seconds after rotation...")
         else:
             print(f"Waiting {wait_s} seconds for RNDIS teardown...")
 
