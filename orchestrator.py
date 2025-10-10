@@ -118,6 +118,13 @@ def update_ip_history(current_ip, force_add=False, is_failure=False):
 # ========= Network / modem =========
 
 def detect_modem_port():
+    # SIM7600E typically uses ttyUSB2 and ttyUSB3 for AT commands
+    # Check the most common AT command ports first
+    for port in ['/dev/ttyUSB2', '/dev/ttyUSB3']:
+        if os.path.exists(port):
+            return port
+    
+    # Fallback: scan for any ttyUSB port
     for dev in os.listdir('/dev'):
         if dev.startswith('ttyUSB'):
             return f'/dev/{dev}'
