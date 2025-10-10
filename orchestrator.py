@@ -751,6 +751,49 @@ def detect_rndis_interface():
     return None, False
 
 
+def smart_apn_rotation():
+    """Smart rotation: Switch between different APNs to get different IP pools."""
+    print("🔄 Performing APN switching for IP change...")
+    try:
+        at_port = detect_modem_port()
+        if not at_port or not os.path.exists(at_port):
+            print(f"⚠️ APN rotation skipped: AT port {at_port} not available")
+            return False
+
+        # Three UK APN options
+        apns = ["three.co.uk", "internet", "3internet"]
+        
+        with serial.Serial(at_port, 115200, timeout=5) as ser:
+            # Get current APN
+            ser.write(b"AT+CGDCONT?\r\n")
+            time.sleep(2)
+            current_apn_response = ser.read_all().decode(errors='ignore')
+            print(f"  📡 Current APN response: {current_apn_response}")
+            
+            # Try switching to a different APN
+            for apn in apns:
+                print(f"  📡 Trying APN: {apn}")
+                ser.write(f"AT+CGDCONT=1,\"IP\",\"{apn}\"\r\n".encode())
+                time.sleep(2)
+                ser.read_all()
+                
+                # Deactivate and reactivate
+                ser.write(b"AT+CGACT=0,1\r\n")
+                time.sleep(2)
+                ser.read_all()
+                
+                ser.write(b"AT+CGACT=1,1\r\n")
+                time.sleep(3)
+                ser.read_all()
+                
+                print(f"  ✅ Switched to APN: {apn}")
+                return True
+
+        return False
+    except Exception as e:
+        print(f"  ⚠️ APN rotation failed: {e}")
+        return False
+
 def smart_ip_rotation_rndis_modem(randomise_imei_enabled=False, wait_seconds=30):
     """Smart IP rotation using network mode switching and APN cycling - much faster than full reset."""
     print("🔄 Performing smart IP rotation (network mode + APN cycling)...")
@@ -926,13 +969,17 @@ def teardown_rndis(wait_s: int, deep_reset: bool = False, randomise_imei_enabled
         
         # Step 3: NOW do the modem reset (while interface can still communicate with modem)
         if deep_reset:
-            # Try IMEI randomization first (force new IP with same network)
-            print("  🔄 Performing IMEI randomization for IP change...")
-            smart_success = smart_ip_rotation_rndis_modem(randomise_imei_enabled=True, wait_seconds=30)
+            # Try APN switching first (different APNs = different IP pools)
+            print("  🔄 Performing APN switching for IP change...")
+            smart_success = smart_apn_rotation()
             
             if not smart_success:
-                print("  ⚠️ IMEI randomization failed, falling back to deep reset...")
-                deep_reset_rndis_modem(randomise_imei_enabled=True, wait_seconds=deep_reset_wait)
+                print("  ⚠️ APN switching failed, trying IMEI randomization...")
+                smart_success = smart_ip_rotation_rndis_modem(randomise_imei_enabled=True, wait_seconds=30)
+                
+                if not smart_success:
+                    print("  ⚠️ IMEI randomization failed, falling back to deep reset...")
+                    deep_reset_rndis_modem(randomise_imei_enabled=True, wait_seconds=deep_reset_wait)
         
         # Step 4: Finally bring interface down
         print(f"  📡 Bringing interface down...")
