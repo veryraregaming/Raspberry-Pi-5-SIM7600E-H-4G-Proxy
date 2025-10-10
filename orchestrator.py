@@ -1596,7 +1596,6 @@ def status():
         'interface': interface_name,
         'connected': up,
         'network_type': get_network_type(),
-        'current_apn': get_current_apn(),
         'imei': {
             'current': current_imei,
             'original': original_imei,

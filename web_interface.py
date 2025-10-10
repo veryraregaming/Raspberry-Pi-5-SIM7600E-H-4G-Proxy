@@ -268,7 +268,6 @@ HTML_TEMPLATE = """
                         <p style="margin-top: 10px;"><strong>Mode:</strong> <span id="connection-mode" style="font-family: 'Courier New', monospace; color: #667eea;">-</span></p>
                         <p><strong>Interface:</strong> <span id="interface-name" style="font-family: 'Courier New', monospace; color: #667eea;">-</span></p>
                         <p><strong>Network Type:</strong> <span id="network-type" style="font-family: 'Courier New', monospace; color: #667eea;">-</span></p>
-                        <p><strong>APN:</strong> <span id="current-apn" style="font-family: 'Courier New', monospace; color: #667eea;">-</span></p>
                     </div>
                 </div>
                 
@@ -401,7 +400,6 @@ HTML_TEMPLATE = """
             document.getElementById('connection-mode').textContent = data.connection_mode || 'Unknown';
             document.getElementById('interface-name').textContent = data.interface || 'Unknown';
             document.getElementById('network-type').textContent = data.network_type || 'Unknown';
-            document.getElementById('current-apn').textContent = data.current_apn || 'Unknown';
             
             // Update IMEI information
             if (data.imei) {
