@@ -216,7 +216,7 @@ def ensure_ppp_default_route():
         print(f"Warning: Could not fix routing: {e}")
 
 def get_network_type():
-    """Detect current network type (3G/4G) from modem."""
+    """Detect current network type (3G/4G only) from modem."""
     try:
         at_port = detect_modem_port()
         if not at_port or not os.path.exists(at_port):
@@ -227,13 +227,11 @@ def get_network_type():
             time.sleep(1)
             response = ser.read_all().decode(errors='ignore')
             
-            # Parse network type from COPS response
+            # Parse network type from COPS response (4G and 3G only)
             if "LTE" in response or "4G" in response:
                 return "4G"
             elif "UMTS" in response or "3G" in response:
                 return "3G"
-            elif "GSM" in response or "2G" in response:
-                return "2G"
             else:
                 return "Unknown"
     except Exception:
