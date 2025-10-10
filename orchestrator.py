@@ -264,15 +264,32 @@ def get_current_apn():
             time.sleep(2)  # Longer wait for response
             apn_response = ser.read_all().decode(errors='ignore')
             
-            # If empty, try alternative command
+            # If empty, try alternative commands
             if not apn_response or len(apn_response.strip()) < 10:
-                print("🔍 Trying alternative APN command...")
-                ser.write(b"AT+CGPIAF=1\r\n")  # Enable IP address format
-                time.sleep(1)
-                ser.read_all()
+                print("🔍 Trying alternative APN commands...")
+                
+                # Try different AT commands
+                commands = [
+                    b"AT+CGDCONT=1\r\n",  # Set PDP context
+                    b"AT+CGDCONT?\r\n",    # Query again
+                    b"AT+COPS?\r\n",       # Check operator
+                    b"AT+CGPADDR=1\r\n"    # Get IP address
+                ]
+                
+                for cmd in commands:
+                    ser.write(cmd)
+                    time.sleep(1)
+                    response = ser.read_all().decode(errors='ignore')
+                    if response and len(response.strip()) > 5:
+                        apn_response += response
+                        print(f"🔍 Got response from {cmd}: {response[:50]}...")
+                
+                # Final attempt
                 ser.write(b"AT+CGDCONT?\r\n")
                 time.sleep(2)
-                apn_response = ser.read_all().decode(errors='ignore')
+                final_response = ser.read_all().decode(errors='ignore')
+                if final_response:
+                    apn_response = final_response
             
             print(f"🔍 APN Response: {repr(apn_response)}")  # Debug output
             
@@ -458,6 +475,12 @@ def record_initial_ip():
             
             current_ip = get_current_ip()
             print(f"📡 Initial IP check attempt {attempt + 1}: {current_ip}")
+            
+            # If we get a timeout, wait a bit longer
+            if "timeout" in str(current_ip).lower() or "proxy timeout" in str(current_ip).lower():
+                print(f"⏳ Proxy timeout detected, waiting longer...")
+                time.sleep(30)  # Wait extra 30 seconds
+                continue
             
             # Check if we have a valid IP
             if (current_ip and 
