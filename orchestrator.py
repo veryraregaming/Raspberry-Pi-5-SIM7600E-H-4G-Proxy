@@ -220,31 +220,27 @@ def get_network_type():
     try:
         at_port = detect_modem_port()
         if not at_port or not os.path.exists(at_port):
-            return "Unknown"
+            return "4G"  # Default to 4G
         
-        with serial.Serial(at_port, 115200, timeout=3) as ser:
-            # Try multiple AT commands to detect network type
+        # Try to open port with very short timeout to avoid blocking
+        with serial.Serial(at_port, 115200, timeout=1) as ser:
+            # Quick AT command with minimal wait
             ser.write(b"AT+COPS?\r\n")
-            time.sleep(1)
+            time.sleep(0.5)  # Much shorter wait
             cops_response = ser.read_all().decode(errors='ignore')
             
-            ser.write(b"AT+CNMP?\r\n")
-            time.sleep(1)
-            cnmp_response = ser.read_all().decode(errors='ignore')
+            # Parse network type from response
+            combined = cops_response.upper()
             
-            # Combine responses for better detection
-            combined = (cops_response + cnmp_response).upper()
-            
-            # Parse network type from responses
-            if "LTE" in combined or "4G" in combined or "CNMP:38" in combined:
+            if "LTE" in combined or "4G" in combined:
                 return "4G"
-            elif "UMTS" in combined or "3G" in combined or "CNMP:14" in combined:
+            elif "UMTS" in combined or "3G" in combined:
                 return "3G"
             else:
                 # Default to 4G if we can't detect (most likely on modern networks)
                 return "4G"
-    except Exception as e:
-        # Default to 4G if detection fails
+    except Exception:
+        # Default to 4G if detection fails (port busy or other error)
         return "4G"
 
 def get_current_ip():
