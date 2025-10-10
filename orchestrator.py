@@ -1351,16 +1351,23 @@ def rotate():
         return jsonify({'status': 'busy', 'message': 'rotation already in progress'}), 429
     in_progress = True
     
-    # Set a timeout to prevent hanging
-    import signal
-    def timeout_handler(signum, frame):
-        global in_progress
-        in_progress = False
-        rotate_lock.release()
-        raise TimeoutError("Rotation timed out after 5 minutes")
+    # Use threading timeout instead of signal (works in Flask threads)
+    import threading
+    import time
     
-    signal.signal(signal.SIGALRM, timeout_handler)
-    signal.alarm(300)  # 5 minute timeout
+    def timeout_worker():
+        time.sleep(300)  # 5 minutes
+        global in_progress
+        if in_progress:
+            print("⚠️ Rotation timed out after 5 minutes - forcing completion")
+            in_progress = False
+            try:
+                rotate_lock.release()
+            except:
+                pass
+    
+    timeout_thread = threading.Thread(target=timeout_worker, daemon=True)
+    timeout_thread.start()
     
     try:
         config = load_config()
@@ -1692,7 +1699,6 @@ def rotate():
         send_discord_notification(current_ip, None, is_rotation=False, is_failure=True, error_message=err)
         return jsonify({'status': 'failed', 'error': err}), 500
     finally:
-        signal.alarm(0)  # Cancel timeout
         in_progress = False
         rotate_lock.release()
 
