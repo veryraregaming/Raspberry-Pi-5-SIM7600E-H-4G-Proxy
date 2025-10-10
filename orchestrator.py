@@ -750,56 +750,6 @@ def detect_rndis_interface():
         pass
     return None, False
 
-def smart_3g_4g_rotation():
-    """Smart rotation: Switch between 3G and 4G to get different IP pools."""
-    print("🔄 Performing 3G/4G network switching for guaranteed IP change...")
-    try:
-        at_port = detect_modem_port()
-        if not at_port or not os.path.exists(at_port):
-            print(f"⚠️ Smart rotation skipped: AT port {at_port} not available")
-            return False
-
-        with serial.Serial(at_port, 115200, timeout=5) as ser:
-            # Get current network type
-            current_type = get_network_type()
-            print(f"  📡 Current network: {current_type}")
-            
-            # Determine target network (opposite of current)
-            if current_type == "4G":
-                target_type = "3G"
-                target_cmd = b"AT+CNMP=14\r\n"  # 3G only
-                print("  📡 Switching to 3G mode...")
-            else:
-                target_type = "4G" 
-                target_cmd = b"AT+CNMP=38\r\n"  # 4G only
-                print("  📡 Switching to 4G mode...")
-            
-            # Step 1: Deactivate current connection
-            print("  📡 Deactivating current connection...")
-            ser.write(b"AT+CGACT=0,1\r\n")
-            time.sleep(2)
-            ser.read_all()
-            
-            # Step 2: Switch network type
-            ser.write(target_cmd)
-            time.sleep(3)
-            ser.read_all()
-            
-            # Step 3: Wait for network registration
-            print(f"  ⏱️ Waiting for {target_type} registration...")
-            time.sleep(5)
-            
-            # Step 4: Reactivate connection
-            print(f"  📡 Reactivating connection on {target_type}...")
-            ser.write(b"AT+CGACT=1,1\r\n")
-            time.sleep(3)
-            ser.read_all()
-
-        print(f"  ✅ Network switched to {target_type}")
-        return True
-    except Exception as e:
-        print(f"  ⚠️ 3G/4G rotation failed: {e}")
-        return False
 
 def smart_ip_rotation_rndis_modem(randomise_imei_enabled=False, wait_seconds=30):
     """Smart IP rotation using network mode switching and APN cycling - much faster than full reset."""
@@ -981,12 +931,8 @@ def teardown_rndis(wait_s: int, deep_reset: bool = False, randomise_imei_enabled
             smart_success = smart_ip_rotation_rndis_modem(randomise_imei_enabled=True, wait_seconds=30)
             
             if not smart_success:
-                print("  ⚠️ IMEI randomization failed, trying 3G/4G switching...")
-                smart_success = smart_3g_4g_rotation()
-                
-                if not smart_success:
-                    print("  ⚠️ 3G/4G switching failed, falling back to deep reset...")
-                    deep_reset_rndis_modem(randomise_imei_enabled=True, wait_seconds=deep_reset_wait)
+                print("  ⚠️ IMEI randomization failed, falling back to deep reset...")
+                deep_reset_rndis_modem(randomise_imei_enabled=True, wait_seconds=deep_reset_wait)
         
         # Step 4: Finally bring interface down
         print(f"  📡 Bringing interface down...")
