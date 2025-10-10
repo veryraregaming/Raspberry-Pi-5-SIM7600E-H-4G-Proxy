@@ -250,12 +250,22 @@ def get_current_apn():
         if not at_port or not os.path.exists(at_port):
             return "Unknown"
         
-        # Try to open port with very short timeout to avoid blocking
-        with serial.Serial(at_port, 115200, timeout=2) as ser:
-            # Quick AT command with minimal wait
+        # Try to open port with longer timeout for APN detection
+        with serial.Serial(at_port, 115200, timeout=3) as ser:
+            # Try multiple AT commands to get APN info
             ser.write(b"AT+CGDCONT?\r\n")
-            time.sleep(1)  # Slightly longer wait
+            time.sleep(2)  # Longer wait for response
             apn_response = ser.read_all().decode(errors='ignore')
+            
+            # If empty, try alternative command
+            if not apn_response or len(apn_response.strip()) < 10:
+                print("🔍 Trying alternative APN command...")
+                ser.write(b"AT+CGPIAF=1\r\n")  # Enable IP address format
+                time.sleep(1)
+                ser.read_all()
+                ser.write(b"AT+CGDCONT?\r\n")
+                time.sleep(2)
+                apn_response = ser.read_all().decode(errors='ignore')
             
             print(f"🔍 APN Response: {repr(apn_response)}")  # Debug output
             
