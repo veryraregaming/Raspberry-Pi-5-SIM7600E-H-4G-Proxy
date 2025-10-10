@@ -222,20 +222,30 @@ def get_network_type():
         if not at_port or not os.path.exists(at_port):
             return "Unknown"
         
-        with serial.Serial(at_port, 115200, timeout=2) as ser:
+        with serial.Serial(at_port, 115200, timeout=3) as ser:
+            # Try multiple AT commands to detect network type
             ser.write(b"AT+COPS?\r\n")
             time.sleep(1)
-            response = ser.read_all().decode(errors='ignore')
+            cops_response = ser.read_all().decode(errors='ignore')
             
-            # Parse network type from COPS response (4G and 3G only)
-            if "LTE" in response or "4G" in response:
+            ser.write(b"AT+CNMP?\r\n")
+            time.sleep(1)
+            cnmp_response = ser.read_all().decode(errors='ignore')
+            
+            # Combine responses for better detection
+            combined = (cops_response + cnmp_response).upper()
+            
+            # Parse network type from responses
+            if "LTE" in combined or "4G" in combined or "CNMP:38" in combined:
                 return "4G"
-            elif "UMTS" in response or "3G" in response:
+            elif "UMTS" in combined or "3G" in combined or "CNMP:14" in combined:
                 return "3G"
             else:
-                return "Unknown"
-    except Exception:
-        return "Unknown"
+                # Default to 4G if we can't detect (most likely on modern networks)
+                return "4G"
+    except Exception as e:
+        # Default to 4G if detection fails
+        return "4G"
 
 def get_current_ip():
     """Get current public IPv4 address via cellular interface only."""
