@@ -741,34 +741,42 @@ def smart_ip_rotation_rndis_modem(randomise_imei_enabled=False, wait_seconds=30)
             return False
 
         with serial.Serial(at_port, 115200, timeout=5) as ser:
-            # Step 1: Deactivate PDP context (gentle disconnect)
+            # Step 1: Deactivate PDP context (disconnect data session)
             print("  📡 Deactivating PDP context...")
             ser.write(b"AT+CGACT=0,1\r\n")
             time.sleep(2)
             ser.read_all()
+            
+            # Step 2: Detach from packet network (forces carrier to release IP)
+            print("  📡 Detaching from packet network...")
+            ser.write(b"AT+CGATT=0\r\n")
+            time.sleep(3)
+            ser.read_all()
 
-            # Step 2: Switch network mode (4G -> 3G -> 4G for new IP)
+            # Step 3: Network deregistration (forces clean disconnect)
+            print("  📡 Deregistering from network...")
+            ser.write(b"AT+COPS=2\r\n")
+            time.sleep(3)
+            ser.read_all()
+            
+            # Step 4: Wait for carrier to forget us (critical for sticky CGNAT)
+            print(f"  ⏱️ Waiting {wait_seconds}s for carrier to release IP assignment...")
+            time.sleep(max(20, wait_seconds))
+
+            # Step 5: Switch network mode (4G -> 3G -> 4G for new IP pool)
             print("  📡 Switching to 3G mode...")
             ser.write(b"AT+CNMP=14\r\n")  # 3G only
-            time.sleep(3)
+            time.sleep(4)
             ser.read_all()
-
-            # Step 3: Wait for network to register on 3G
-            print("  ⏱️ Waiting for 3G registration...")
-            time.sleep(5)
             
-            # Step 4: Switch back to 4G mode
+            # Step 6: Switch back to 4G mode (forces re-registration)
             print("  📡 Switching back to 4G mode...")
-            ser.write(b"AT+CNMP=38\r\n")  # 4G only
-            time.sleep(3)
+            ser.write(b"AT+CNMP=38\r\n")  # 4G only (LTE preferred)
+            time.sleep(4)
             ser.read_all()
 
-            # Step 5: Wait for network to re-register on 4G
-            print("  ⏱️ Waiting for 4G re-registration...")
-            time.sleep(5)
-
-            # Step 6: Try APN cycling (everywhere -> eesecure -> everywhere)
-            print("  📡 Cycling APN for fresh IP...")
+            # Step 7: Try APN cycling (sometimes triggers new IP pool)
+            print("  📡 Cycling APN for fresh IP pool...")
             ser.write(b'AT+CGDCONT=1,"IP","eesecure"\r\n')  # Switch to eesecure
             time.sleep(2)
             ser.read_all()
@@ -776,14 +784,26 @@ def smart_ip_rotation_rndis_modem(randomise_imei_enabled=False, wait_seconds=30)
             ser.write(b'AT+CGDCONT=1,"IP","everywhere"\r\n')  # Back to everywhere
             time.sleep(2)
             ser.read_all()
+            
+            # Step 8: Auto-register to network
+            print("  📡 Auto-registering to network...")
+            ser.write(b"AT+COPS=0\r\n")
+            time.sleep(5)
+            ser.read_all()
 
-            # Step 7: Reactivate PDP context with new settings
+            # Step 9: Reattach to packet network
+            print("  📡 Reattaching to packet network...")
+            ser.write(b"AT+CGATT=1\r\n")
+            time.sleep(3)
+            ser.read_all()
+
+            # Step 10: Reactivate PDP context with new settings
             print("  📡 Reactivating PDP context...")
             ser.write(b"AT+CGACT=1,1\r\n")
             time.sleep(3)
             ser.read_all()
 
-        print("  ✅ Smart IP rotation complete")
+        print("  ✅ Smart IP rotation complete (aggressive mode)")
         return True
     except Exception as e:
         print(f"  ⚠️ Smart rotation failed: {e}")
@@ -858,53 +878,99 @@ def deep_reset_rndis_modem(randomise_imei_enabled=False, wait_seconds=60):
         return False
 
 def teardown_rndis(wait_s: int, deep_reset: bool = False, randomise_imei_enabled: bool = False, deep_reset_wait: int = 60):
-    """Teardown RNDIS interface by bringing it down."""
+    """Teardown RNDIS interface by properly releasing IP and resetting modem."""
     iface, _ = detect_rndis_interface()
     if iface:
-        print(f"Bringing down RNDIS interface: {iface}")
-        subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "down"],
-                       check=False)
-
+        print(f"Tearing down RNDIS interface: {iface}")
+        
+        # Step 1: Release DHCP lease FIRST (while interface is still up)
+        print("  📡 Releasing DHCP lease...")
+        subprocess.run([SUDO_PATH, "-n", "dhclient", "-r", iface],
+                       capture_output=True, text=True, check=False, timeout=10)
+        time.sleep(1)
+        
+        # Step 2: Flush IP from interface
+        print("  📡 Flushing IP address from interface...")
+        subprocess.run([SUDO_PATH, "-n", IP_PATH, "addr", "flush", "dev", iface],
+                       capture_output=True, text=True, check=False)
+        time.sleep(1)
+        
+        # Step 3: NOW do the modem reset (while interface can still communicate with modem)
         if deep_reset:
             # Try smart rotation first (faster, less disruptive)
-            print("  🔄 Trying smart IP rotation first...")
+            print("  🔄 Performing modem-level IP rotation...")
             smart_success = smart_ip_rotation_rndis_modem(randomise_imei_enabled=randomise_imei_enabled, wait_seconds=30)
             
             if not smart_success:
                 print("  ⚠️ Smart rotation failed, falling back to deep reset...")
                 deep_reset_rndis_modem(randomise_imei_enabled=randomise_imei_enabled, wait_seconds=deep_reset_wait)
-            
-            print(f"Waiting {wait_s} seconds after rotation...")
-        else:
-            print(f"Waiting {wait_s} seconds for RNDIS teardown...")
-
+        
+        # Step 4: Finally bring interface down
+        print(f"  📡 Bringing interface down...")
+        subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "down"],
+                       capture_output=True, text=True, check=False)
+        
+        # Step 5: Wait for carrier to forget us
+        print(f"  ⏱️ Waiting {wait_s} seconds for carrier to release IP pool assignment...")
         time.sleep(max(1, int(wait_s)))
     else:
         print("No RNDIS interface found, skipping teardown")
 
 def start_rndis():
-    """Start RNDIS interface by bringing it up and getting DHCP."""
+    """Start RNDIS interface by bringing it up and requesting NEW IP via DHCP."""
     iface, has_ip = detect_rndis_interface()
     if not iface:
         raise RuntimeError("No RNDIS interface found")
 
-    print(f"Bringing up RNDIS interface: {iface}")
-    # Bring interface up
+    print(f"Starting RNDIS interface: {iface}")
+    
+    # Step 1: Ensure interface is down first (clean slate)
+    subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "down"],
+                   capture_output=True, text=True, check=False)
+    time.sleep(1)
+    
+    # Step 2: Bring interface up
+    print(f"  📡 Bringing interface up...")
     res = subprocess.run([SUDO_PATH, "-n", IP_PATH, "link", "set", "dev", iface, "up"],
                          capture_output=True, text=True, check=False)
     if res.returncode != 0:
         raise RuntimeError(f"Failed to bring up {iface}: {res.stderr.strip()}")
-
-    time.sleep(2)
-
-    # Get IP via DHCP
-    print(f"Getting IP via DHCP for {iface}...")
-    res = subprocess.run([SUDO_PATH, "-n", "dhclient", "-v", iface],
+    
+    time.sleep(3)
+    
+    # Step 3: Kill any existing dhclient for this interface
+    print(f"  📡 Killing any existing dhclient processes...")
+    subprocess.run([SUDO_PATH, "-n", "pkill", "-f", f"dhclient.*{iface}"],
+                   capture_output=True, text=True, check=False)
+    time.sleep(1)
+    
+    # Step 4: Remove any stale DHCP lease file
+    print(f"  📡 Removing stale DHCP lease...")
+    subprocess.run([SUDO_PATH, "-n", "rm", "-f", f"/var/lib/dhcp/dhclient.{iface}.leases"],
+                   capture_output=True, text=True, check=False)
+    subprocess.run([SUDO_PATH, "-n", "rm", "-f", f"/var/lib/dhclient/dhclient-{iface}.leases"],
+                   capture_output=True, text=True, check=False)
+    
+    # Step 5: Request completely NEW IP (not renew) with -1 flag for one-shot
+    print(f"  📡 Requesting NEW IP via DHCP (not renewing old lease)...")
+    res = subprocess.run([SUDO_PATH, "-n", "dhclient", "-1", "-v", iface],
                          capture_output=True, text=True, timeout=30, check=False)
-
+    
     if res.returncode != 0:
-        raise RuntimeError(f"DHCP failed for {iface}: {res.stderr.strip()}")
-
+        # Try without -1 flag as fallback
+        print(f"  ⚠️ DHCP with -1 failed, trying standard dhclient...")
+        res = subprocess.run([SUDO_PATH, "-n", "dhclient", "-v", iface],
+                             capture_output=True, text=True, timeout=30, check=False)
+        if res.returncode != 0:
+            raise RuntimeError(f"DHCP failed for {iface}: {res.stderr.strip()}")
+    
+    # Step 6: Verify we got an IP
+    time.sleep(2)
+    _, has_ip = detect_rndis_interface()
+    if not has_ip:
+        raise RuntimeError(f"Interface {iface} came up but has no IP address")
+    
+    print(f"  ✅ RNDIS interface ready with new IP")
     return iface
 
 def wait_for_rndis_up(timeout_s: int) -> bool:
