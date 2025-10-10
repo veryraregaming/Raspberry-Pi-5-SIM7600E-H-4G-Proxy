@@ -251,21 +251,43 @@ def get_current_apn():
             return "Unknown"
         
         # Try to open port with very short timeout to avoid blocking
-        with serial.Serial(at_port, 115200, timeout=1) as ser:
+        with serial.Serial(at_port, 115200, timeout=2) as ser:
             # Quick AT command with minimal wait
             ser.write(b"AT+CGDCONT?\r\n")
-            time.sleep(0.5)  # Much shorter wait
+            time.sleep(1)  # Slightly longer wait
             apn_response = ser.read_all().decode(errors='ignore')
             
-            # Parse APN from response (look for quoted APN names)
+            print(f"🔍 APN Response: {repr(apn_response)}")  # Debug output
+            
+            # Parse APN from response (multiple patterns)
             import re
-            apn_match = re.search(r'\+CGDCONT:.*?"([^"]+)"', apn_response)
-            if apn_match:
-                return apn_match.group(1)
-            else:
-                return "Unknown"
-    except Exception:
-        # Default if detection fails (port busy or other error)
+            
+            # Try different patterns
+            patterns = [
+                r'\+CGDCONT:\s*\d+,\s*"IP",\s*"([^"]+)"',  # Standard format
+                r'\+CGDCONT:.*?"([^"]+)"',                 # Any quoted string
+                r'CGDCONT.*?(\w+\.\w+\.\w+)',              # Domain format
+                r'CGDCONT.*?(three|internet|everywhere)',  # Known APNs
+            ]
+            
+            for pattern in patterns:
+                apn_match = re.search(pattern, apn_response, re.IGNORECASE)
+                if apn_match:
+                    apn = apn_match.group(1)
+                    if apn and len(apn) > 2:  # Valid APN length
+                        return apn
+            
+            # If no pattern matches, try to extract any word after CGDCONT
+            words = apn_response.split()
+            for i, word in enumerate(words):
+                if 'CGDCONT' in word and i + 2 < len(words):
+                    potential_apn = words[i + 2].strip('"')
+                    if '.' in potential_apn or potential_apn.lower() in ['internet', 'everywhere', 'three']:
+                        return potential_apn
+            
+            return "Unknown"
+    except Exception as e:
+        print(f"🔍 APN detection error: {e}")
         return "Unknown"
 
 def get_current_ip():
