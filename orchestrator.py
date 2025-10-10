@@ -976,17 +976,17 @@ def teardown_rndis(wait_s: int, deep_reset: bool = False, randomise_imei_enabled
         
         # Step 3: NOW do the modem reset (while interface can still communicate with modem)
         if deep_reset:
-            # Try 3G/4G switching first (guaranteed different IP pools)
-            print("  🔄 Performing 3G/4G network switching...")
-            smart_success = smart_3g_4g_rotation()
+            # Try IMEI randomization first (force new IP with same network)
+            print("  🔄 Performing IMEI randomization for IP change...")
+            smart_success = smart_ip_rotation_rndis_modem(randomise_imei_enabled=True, wait_seconds=30)
             
             if not smart_success:
-                print("  ⚠️ 3G/4G switching failed, trying smart rotation...")
-                smart_success = smart_ip_rotation_rndis_modem(randomise_imei_enabled=randomise_imei_enabled, wait_seconds=30)
+                print("  ⚠️ IMEI randomization failed, trying 3G/4G switching...")
+                smart_success = smart_3g_4g_rotation()
                 
                 if not smart_success:
-                    print("  ⚠️ Smart rotation failed, falling back to deep reset...")
-                    deep_reset_rndis_modem(randomise_imei_enabled=randomise_imei_enabled, wait_seconds=deep_reset_wait)
+                    print("  ⚠️ 3G/4G switching failed, falling back to deep reset...")
+                    deep_reset_rndis_modem(randomise_imei_enabled=True, wait_seconds=deep_reset_wait)
         
         # Step 4: Finally bring interface down
         print(f"  📡 Bringing interface down...")
