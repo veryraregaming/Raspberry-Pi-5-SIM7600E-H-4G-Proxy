@@ -296,6 +296,10 @@ def get_current_apn():
             # Parse APN from response (multiple patterns)
             import re
             
+            # Check if Three UK (operator "3")
+            if '+COPS: 0,0,"3"' in apn_response or '"3"' in apn_response:
+                return "Auto (Three UK)"
+            
             # Try different patterns
             patterns = [
                 r'\+CGDCONT:\s*\d+,\s*"IP",\s*"([^"]+)"',  # Standard format
@@ -310,6 +314,10 @@ def get_current_apn():
                     apn = apn_match.group(1)
                     if apn and len(apn) > 2:  # Valid APN length
                         return apn
+            
+            # If all APNs are empty, check for auto-detection
+            if '"","0.0.0.0"' in apn_response or '""' in apn_response:
+                return "Auto-detected"
             
             # If no pattern matches, try to extract any word after CGDCONT
             words = apn_response.split()
