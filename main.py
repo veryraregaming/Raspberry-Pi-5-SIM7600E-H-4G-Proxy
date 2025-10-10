@@ -586,7 +586,13 @@ acl authenticated proxy_auth REQUIRED
 http_access allow authenticated
 http_access deny all
 
+# More forgiving timeouts for WAF processing
+connect_timeout 2 minutes
+read_timeout 5 minutes
+
+# Hide proxy headers to avoid WAF detection
 forwarded_for off
+via off
 request_header_access X-Forwarded-For deny all
 request_header_access Via deny all
 
@@ -613,7 +619,13 @@ http_access allow localnet
 http_access allow localhost
 http_access deny all
 
+# More forgiving timeouts for WAF processing
+connect_timeout 2 minutes
+read_timeout 5 minutes
+
+# Hide proxy headers to avoid WAF detection
 forwarded_for off
+via off
 request_header_access X-Forwarded-For deny all
 request_header_access Via deny all
 
