@@ -243,6 +243,31 @@ def get_network_type():
         # Default to 4G if detection fails (port busy or other error)
         return "4G"
 
+def get_current_apn():
+    """Detect current APN from modem."""
+    try:
+        at_port = detect_modem_port()
+        if not at_port or not os.path.exists(at_port):
+            return "Unknown"
+        
+        # Try to open port with very short timeout to avoid blocking
+        with serial.Serial(at_port, 115200, timeout=1) as ser:
+            # Quick AT command with minimal wait
+            ser.write(b"AT+CGDCONT?\r\n")
+            time.sleep(0.5)  # Much shorter wait
+            apn_response = ser.read_all().decode(errors='ignore')
+            
+            # Parse APN from response (look for quoted APN names)
+            import re
+            apn_match = re.search(r'\+CGDCONT:.*?"([^"]+)"', apn_response)
+            if apn_match:
+                return apn_match.group(1)
+            else:
+                return "Unknown"
+    except Exception:
+        # Default if detection fails (port busy or other error)
+        return "Unknown"
+
 def get_current_ip():
     """Get current public IPv4 address via cellular interface only."""
     global in_progress
@@ -751,6 +776,32 @@ def detect_rndis_interface():
     return None, False
 
 
+def get_carrier_apns():
+    """Get valid APNs for the current carrier."""
+    try:
+        at_port = detect_modem_port()
+        if not at_port or not os.path.exists(at_port):
+            return ["internet"]  # Default fallback
+        
+        with serial.Serial(at_port, 115200, timeout=2) as ser:
+            ser.write(b"AT+COPS?\r\n")
+            time.sleep(1)
+            cops_response = ser.read_all().decode(errors='ignore')
+            
+            # Detect carrier from COPS response
+            if "23410" in cops_response or "three" in cops_response.lower():
+                return ["three.co.uk", "internet", "3internet"]
+            elif "23415" in cops_response or "vodafone" in cops_response.lower():
+                return ["internet", "web", "vpn"]
+            elif "23430" in cops_response or "ee" in cops_response.lower():
+                return ["everywhere", "internet"]
+            elif "23402" in cops_response or "o2" in cops_response.lower():
+                return ["internet", "wap", "contract"]
+            else:
+                return ["internet"]  # Default fallback
+    except Exception:
+        return ["internet"]  # Default fallback
+
 def smart_apn_rotation():
     """Smart rotation: Switch between different APNs to get different IP pools."""
     print("🔄 Performing APN switching for IP change...")
@@ -760,8 +811,9 @@ def smart_apn_rotation():
             print(f"⚠️ APN rotation skipped: AT port {at_port} not available")
             return False
 
-        # Three UK APN options
-        apns = ["three.co.uk", "internet", "3internet"]
+        # Get carrier-specific APN options
+        apns = get_carrier_apns()
+        print(f"  📡 Available APNs for carrier: {apns}")
         
         with serial.Serial(at_port, 115200, timeout=5) as ser:
             # Get current APN
@@ -1414,6 +1466,7 @@ def status():
         'interface': interface_name,
         'connected': up,
         'network_type': get_network_type(),
+        'current_apn': get_current_apn(),
         'imei': {
             'current': current_imei,
             'original': original_imei,
