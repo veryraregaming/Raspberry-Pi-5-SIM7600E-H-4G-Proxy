@@ -1350,6 +1350,18 @@ def rotate():
     if not rotate_lock.acquire(blocking=False):
         return jsonify({'status': 'busy', 'message': 'rotation already in progress'}), 429
     in_progress = True
+    
+    # Set a timeout to prevent hanging
+    import signal
+    def timeout_handler(signum, frame):
+        global in_progress
+        in_progress = False
+        rotate_lock.release()
+        raise TimeoutError("Rotation timed out after 5 minutes")
+    
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(300)  # 5 minute timeout
+    
     try:
         config = load_config()
         expected = config['api']['token']
@@ -1680,8 +1692,20 @@ def rotate():
         send_discord_notification(current_ip, None, is_rotation=False, is_failure=True, error_message=err)
         return jsonify({'status': 'failed', 'error': err}), 500
     finally:
+        signal.alarm(0)  # Cancel timeout
         in_progress = False
         rotate_lock.release()
+
+@app.post('/rotate/force-clear')
+def force_clear_rotation():
+    """Force clear stuck rotation state"""
+    global in_progress
+    in_progress = False
+    try:
+        rotate_lock.release()
+    except:
+        pass
+    return jsonify({'status': 'cleared', 'message': 'Rotation state cleared'})
 
 @app.get('/status/detailed')
 def status_detailed():
@@ -1871,3 +1895,4 @@ if __name__ == '__main__':
         print()
 
     app.run(host=config['api']['bind'], port=config['api']['port'])
+
