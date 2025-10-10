@@ -360,6 +360,10 @@ def build_discord_embed(current_ip, previous_ip=None, is_rotation=False, is_fail
         title = "🔄 4G Proxy IP Updated"
         description = f"**IP Rotation Complete**\n\n**Previous IP:** `{previous_ip}`\n**New IP:** `{current_ip}`{uptime_text}{history_text}"
         color = 0x00ff00
+    elif is_initial:
+        title = "🚀 4G Proxy System Started"
+        description = f"**Initial Connection**\n\n**IP Address:** `{current_ip}`\n**Status:** Online and ready{uptime_text}{history_text}"
+        color = 0x00ff00
     elif is_rotation:
         title = "🚀 4G Proxy Initialized"
         description = f"**Proxy Started**\n\n**Current IP:** `{current_ip}`\n**Status:** Ready for connections{uptime_text}{history_text}"
@@ -406,7 +410,63 @@ def post_or_patch_discord(webhook_url, payload, msg_id_file):
             save_text(msg_id_file, new_id)
         return ("posted", new_id)
 
-def send_discord_notification(current_ip, previous_ip=None, is_rotation=False, is_failure=False, error_message=None):
+def record_initial_ip():
+    """Record the initial IP when system is fully online with valid IP."""
+    try:
+        # Wait for system to be fully online (check multiple times)
+        for attempt in range(6):  # Try for 3 minutes (30 seconds * 6)
+            time.sleep(30)  # Wait 30 seconds between checks
+            
+            current_ip = get_current_ip()
+            print(f"📡 Initial IP check attempt {attempt + 1}: {current_ip}")
+            
+            # Check if we have a valid IP
+            if (current_ip and 
+                current_ip != "Rotating..." and 
+                current_ip != "Unknown" and
+                current_ip != "Loading..." and
+                len(current_ip.split('.')) == 4):  # Valid IPv4 format
+                
+                # Record in IP history
+                history_entry = {
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'ip': current_ip,
+                    'type': 'Initial Connection',
+                    'success': True
+                }
+                
+                # Add to history file
+                history_file = '/home/rare/.ip_history.json'
+                try:
+                    with open(history_file, 'r') as f:
+                        history = json.load(f)
+                except:
+                    history = []
+                
+                # Only add if this IP isn't already the last entry
+                if not history or history[-1].get('ip') != current_ip:
+                    history.append(history_entry)
+                    with open(history_file, 'w') as f:
+                        json.dump(history, f, indent=2)
+                    
+                    # Send Discord notification
+                    send_discord_notification(current_ip, None, is_rotation=False, is_failure=False, is_initial=True)
+                    print(f"📝 Recorded initial IP: {current_ip}")
+                    return True  # Success!
+                else:
+                    print(f"📝 Initial IP {current_ip} already recorded")
+                    return True  # Already recorded
+            else:
+                print(f"⏳ Waiting for valid IP... (attempt {attempt + 1}/6)")
+        
+        print("⚠️ Failed to get valid IP after 3 minutes")
+        return False
+            
+    except Exception as e:
+        print(f"⚠️ Failed to record initial IP: {e}")
+        return False
+
+def send_discord_notification(current_ip, previous_ip=None, is_rotation=False, is_failure=False, error_message=None, is_initial=False):
     config = load_config()
     webhook_url = config.get('discord', {}).get('webhook_url', '').strip()
     if not webhook_url or webhook_url == "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_TOKEN":
@@ -1988,6 +2048,14 @@ if __name__ == '__main__':
     print("🚀 4G Proxy Orchestrator Started")
     print("="*60)
     print(f"📡 HTTP Proxy: {lan_ip}:3128")
+    
+    # Record initial IP once system is fully online with valid IP
+    def delayed_initial_record():
+        time.sleep(5)  # Wait 5 seconds for initial startup
+        record_initial_ip()
+    
+    initial_thread = threading.Thread(target=delayed_initial_record, daemon=True)
+    initial_thread.start()
     if auth_enabled and proxy_user and proxy_pass:
         print(f"🔐 Authentication: {proxy_user}:{proxy_pass}")
         print(f"🧪 curl -x http://{proxy_user}:{proxy_pass}@{lan_ip}:3128 https://api.ipify.org")
